@@ -136,6 +136,7 @@ const MAX_LOG_CHUNK_SIZE: usize = 1024;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct LogEvent {
+    pub conn_id: u32,
     pub pid: u32,
     pub tid: u32,
     pub ts_ns: u64,
@@ -147,4 +148,5 @@ pub struct LogEvent {
 // The decoder casts the raw byte slice to this struct, safely reads the
 // header fields (pid, tid, ts_ns), and then slices the `data` array exactly 
 // up to `data_len` to avoid parsing trailing garbage before handing it to simd-json.
+```it to simd-json.
 ```

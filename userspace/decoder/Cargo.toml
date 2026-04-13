@@ -1,0 +1,17 @@
+[package]
+name = "ebpf-json-decoder"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libbpf-rs = "0.26"
+libbpf-sys = "1.4"
+tokio = { version = "1", features = ["full"] }
+simd-json = "0.13"
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+prometheus-client = "0.22"
+hyper = { version = "0.14", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"

@@ -1,0 +1,9 @@
+intercept:
+  - port: 443
+    protocol: tcp
+  - port: 8080
+    protocol: tcp
+  - port: 53
+    protocol: udp
+  - port: 514
+    protocol: udp

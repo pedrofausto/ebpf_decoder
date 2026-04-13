@@ -1,0 +1,18 @@
+[package]
+name = "ebpf-json-loader"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libbpf-rs = "0.26"
+libbpf-sys = "1.4"
+anyhow = "1.0"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+ctrlc = "3.4"
+nix = { version = "0.27", features = ["net"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+notify = "6.1"
+clap = { version = "4.0", features = ["derive"] }

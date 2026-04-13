@@ -1,0 +1,49 @@
+# Build artifacts
+target/
+*.o
+*.bpf.o
+*.skel.h
+
+# Generated headers
+vmlinux/vmlinux.h
+
+# OS generated files
+.DS_Store
+.id
+
+# IDE files
+.vscode/
+.idea/
+
+# Rust specific
+Cargo.lock
+debug/
+release/
+
+# Pipeline artifacts
+/sys/fs/bpf/ebpf-json-pipeline/
+
+# Environment Variables & Secrets
+.env
+.env.*
+secrets/
+
+# TLS Keys & PCAP Logs
+*.pem
+*.key
+*.crt
+*.pcap
+*.pcapng
+*.log
+logs/
+
+# Temp & Tool Directories
+.gemini/
+tmp/
+temp/
+coverage/
+
+# Documentation State & Plans
+docs/plans/
+docs/state/
+docs/maestro/

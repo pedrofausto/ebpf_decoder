@@ -47,3 +47,18 @@ coverage/
 docs/plans/
 docs/state/
 docs/maestro/
+# Testing & Debugging Helpers
+arena.c
+scratch.c
+scratch.rs
+scratch_info.rs
+test_array_mmap
+test_array_mmap.c
+test_full_arena
+test_full_arena.c
+test_mmap
+test_mmap.c
+userspace/decoder/scratch.rs
+userspace/decoder/scratch_info.rs
+
+

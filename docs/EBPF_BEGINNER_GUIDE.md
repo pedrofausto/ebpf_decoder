@@ -61,7 +61,15 @@ While the stack itself remains limited to 512 bytes, the introduction of **BPF A
 
 Instead of allocating large buffers on the stack, modern eBPF programs can allocate memory pages on-demand and use **standard C pointers** to manipulate data directly within the Arena. This allows developers to build large buffers, linked lists, and complex data structures in kernel space without hitting the historical 512-byte stack limit, while also enabling zero-copy sharing with userspace.
 
-### Bounded Loops
+### 4. BPF Arena: Circular Buffer Implementation
+In this pipeline, we leverage BPF Arena to handle large JSON payloads that exceed the fixed 1024-byte `log_event_t` limit.
+
+- **The Strategy:** To avoid the overhead of complex memory allocation and deallocation logic in the kernel, we implement a **1GB circular buffer** within the 4GB Arena. 
+- **Head Offset Tracking:** We use a specialized BPF Map (`arena_state_map`) to track the current write position (the "head"). 
+- **Concurrency & Atomics:** Because multiple CPU cores may be processing packets and trying to write to the Arena at the same time, we must use atomic operations. We use the C intrinsic `__sync_fetch_and_add(&state->head, data_len)` to reserve a block of memory for each packet. This ensures that every packet gets its own unique memory space without any risk of race conditions or data corruption.
+- **Relative Offsets:** When passing the captured data to userspace, the kernel sends a **relative offset** rather than an absolute pointer. Userspace adds this offset to its own local memory-map base pointer. This approach prevents issues with pointer truncation and ensures that memory addresses remain valid even if userspace and the kernel have different virtual memory views.
+
+### 5. Bounded Loops
 Historically, eBPF didn't allow loops at all. Now, bounded loops are allowed, but the verifier must be able to prove they will terminate within a strict number of iterations. We often use `#pragma unroll` to unroll small loops at compile time, completely avoiding loop verification issues.
 
 Here is an example from `kernel/layer1_xdp/xdp_edge.bpf.c` showing our bounded loop for VLAN parsing logic:

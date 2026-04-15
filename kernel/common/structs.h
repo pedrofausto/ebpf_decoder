@@ -12,6 +12,9 @@ typedef struct {
     __u32 pid;
     __u32 tid;
     __u64 ts_ns;
+    __u8  is_arena_ptr;
+    __u8  pad[3];
+    __u32 arena_offset;
     __u32 data_len;
     __u8  data[MAX_LOG_CHUNK_SIZE];
 } log_event_t;

@@ -17,6 +17,9 @@ pub struct log_event_t {
     pub pid: u32,
     pub tid: u32,
     pub ts_ns: u64,
+    pub is_arena_ptr: u8,
+    pub pad: [u8; 3],
+    pub arena_offset: u32,
     pub data_len: u32,
     pub data: [u8; 1024],
 }

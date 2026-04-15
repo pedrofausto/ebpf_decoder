@@ -12,8 +12,10 @@ BPF_SOURCES := kernel/layer1_xdp/xdp_edge.bpf.c \
                kernel/layer2_capture/uprobe_tls.bpf.c \
                kernel/layer2_capture/socket_filter.bpf.c \
                kernel/layer3_data/dynptr_handler.bpf.c \
+               kernel/layer4_transport/sk_msg_intercept.bpf.c \
                kernel/layer4_transport/ringbuf_producer.bpf.c \
-               kernel/layer4_transport/user_ringbuf_consumer.bpf.c
+               kernel/layer4_transport/user_ringbuf_consumer.bpf.c \
+               kernel/layer4_transport/cgroup_sockops.bpf.c
 
 BPF_OBJECTS := $(BPF_SOURCES:.c=.o)
 SKELS       := $(BPF_OBJECTS:.o=.skel.h)

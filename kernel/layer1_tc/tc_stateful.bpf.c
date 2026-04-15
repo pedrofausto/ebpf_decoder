@@ -82,6 +82,11 @@ int tc_unified_filter(struct __sk_buff *skb) {
 
     __u32 payload_len = ip_tot_len - extra_len;
     
+    /* Phase 2: Delegate large payloads (> 1024) to L7 path by ignoring them */
+    if (payload_len > MAX_LOG_CHUNK_SIZE) {
+        return TC_ACT_OK;
+    }
+
     /* 
      * Verifier safety: The compiler knows payload_len > 0 because of the 
      * (ip_tot_len <= extra_len) check above, so it optimizes away any == 0 
@@ -92,7 +97,7 @@ int tc_unified_filter(struct __sk_buff *skb) {
     volatile __u32 v_len = payload_len;
     __u32 safe_len = v_len;
 
-    if (safe_len == 0 || safe_len > MAX_LOG_CHUNK_SIZE) {
+    if (safe_len == 0) {
         return TC_ACT_OK;
     }
 

@@ -28,6 +28,13 @@ Designed for capturing encrypted traffic before it hits the network stack (or af
 - **Data Capture:** Captures plaintext JSON payloads before they are encrypted or after they are decrypted by the application.
 - **State Management:** Utilizes an LRU (Least Recently Used) hash map for state tracking across function calls and per-CPU arrays for staging data efficiently.
 
+### 4. BPF Arena Memory Management (Shared)
+For large payloads that exceed the 1024-byte `log_event_t` limit, the pipeline utilizes **BPF Arena** (introduced in Linux 6.9).
+- **Fixed-Size Circular Buffer:** Instead of complex dynamic allocation, the pipeline manages a **1GB circular buffer** within a 4GB Arena. This ensures deterministic memory usage and high performance.
+- **Head Offset Tracking:** The kernel tracks the current write position using the `arena_state_map`.
+- **Atomic Increments:** To handle concurrent packets across multiple CPU cores safely, the kernel uses `__sync_fetch_and_add` to atomically increment the head pointer and reserve space.
+- **Relative Offsets:** The kernel calculates the relative offset from the Arena's base pointer and sends only this offset to userspace. This prevents 32-bit pointer truncation and ensures compatibility with different memory layouts.
+
 ---
 
 ## Userspace Components (Rust)
@@ -43,6 +50,7 @@ The control plane for the pipeline.
 - **Deployment:** 
   - Loads the compiled BPF objects into the kernel.
   - Pins shared maps (e.g., `log_ringbuf`, `port_proto_filter`) to the BPF virtual file system at `/sys/fs/bpf/ebpf-json-pipeline` for cross-process access.
+  - Maps the BPF Arena into userspace memory, providing the base pointer to the Decoder.
   - Safely attaches the TC program first, followed by the XDP program to ensure the pipeline is fully ready before edge traffic is processed.
 
 ### 2. Decoder (`userspace/decoder` -> `ebpf-json-decoder`)
@@ -52,6 +60,8 @@ The data plane consumer.
 - **Decoding:** 
   - Safely casts raw ring buffer bytes to the `log_event_t` structure.
   - Extracts the dynamic payload length.
+  - **Arena Resolution:** If the event indicates an Arena-backed payload, the decoder adds the relative offset to its local mmap base pointer to resolve the absolute memory address.
+  - **Safety Checks:** Implements strict Rust-level bounds checking to ensure `offset + data_len <= 4GB` before attempting to read from the Arena, protecting against kernel-side corruption or malformed offsets.
   - Parses the payload as JSON using `simd-json` (leveraging AVX2 instructions for speed) or falling back to `serde_json`.
 
 ---
@@ -121,9 +131,13 @@ For the Rust Decoder to safely parse the data coming from the kernel, there must
 #define MAX_LOG_CHUNK_SIZE 1024
 
 typedef struct {
+    __u32 conn_id;
     __u32 pid;
     __u32 tid;
     __u64 ts_ns;
+    __u8  is_arena_ptr;
+    __u8  pad[3];
+    __u32 arena_offset;
     __u32 data_len;
     __u8  data[MAX_LOG_CHUNK_SIZE];
 } log_event_t;
@@ -140,10 +154,13 @@ pub struct LogEvent {
     pub pid: u32,
     pub tid: u32,
     pub ts_ns: u64,
+    pub is_arena_ptr: u8,
+    pub pad: [u8; 3],
+    pub arena_offset: u32,
     pub data_len: u32,
     pub data: [u8; MAX_LOG_CHUNK_SIZE],
 }
-
+```
 // Inside the decoder ring buffer callback:
 // The decoder casts the raw byte slice to this struct, safely reads the
 // header fields (pid, tid, ts_ns), and then slices the `data` array exactly 

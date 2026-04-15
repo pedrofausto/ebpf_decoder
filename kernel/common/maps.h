@@ -12,13 +12,6 @@ struct {
     __uint(max_entries, 64 * 1024 * 1024); /* 64MB */
 } log_ringbuf SEC(".maps");
 
-/* BPF Arena: Kernel <-> Userspace shared memory */
-struct {
-    __uint(type, BPF_MAP_TYPE_ARENA);
-    __uint(max_entries, 4096); /* 4096 pages = 16MB */
-    __uint(map_flags, BPF_F_MMAPABLE);
-} log_arena SEC(".maps");
-
 /* Control plane: Userspace -> Kernel */
 struct {
     __uint(type, BPF_MAP_TYPE_USER_RINGBUF);
@@ -63,5 +56,13 @@ struct {
     __uint(value_size, 8);
     __uint(max_entries, 1);
 } drop_counters SEC(".maps");
+
+/* Sockmap for sk_msg interception */
+struct {
+    __uint(type, BPF_MAP_TYPE_SOCKHASH);
+    __uint(max_entries, 10240);
+    __type(key, struct port_proto_key);
+    __type(value, __u32);
+} sockmap SEC(".maps");
 
 #endif /* __MAPS_H */

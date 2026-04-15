@@ -1,71 +1,74 @@
-# Developer Manual: eBPF JSON Log Processing Pipeline
+# Developer Manual: Maintaining the eBPF Pipeline
 
-This manual provides instructions for setting up the environment, verifying prerequisites, and building the eBPF JSON log processing pipeline.
+This manual is for the developer who needs to build, debug, and optimize the pipeline. If the code is working but you need to change how it behaves, start here.
 
-## System Requirements
+---
 
-### Kernel
-- **Minimum Version**: Linux 6.9+ (Required for `BPF_MAP_TYPE_ARENA`).
-- **Configuration**: Must be compiled with `CONFIG_DEBUG_INFO_BTF=y`.
-- **BTF Presence**: Ensure `/sys/kernel/btf/vmlinux` exists.
+## 1. Troubleshooting (FAQ)
 
-### Toolchain
-- **Clang**: version 16 or newer (Required for BTF and CO-RE generation).
-- **libbpf**: version 1.3 or newer.
-- **bpftool**: Required for CO-RE skeleton generation and BTF inspection.
-- **Rust**: Nightly toolchain (Required for `libbpf-rs` with arena support).
-- **Cargo**: With `simd-json` dependencies (requires AVX2 or fallback).
+### "Permission Denied" when loading the BPF object
+- **Cause**: The BPF Verifier failed.
+- **Fix**: Check the verifier logs. Run `sudo bpftool prog load ...` and read the massive output. It usually means you tried to access memory without a NULL check Or your pointer math is too complex.
 
-## Prerequisite Verification
+### "Map not found" at `/sys/fs/bpf/...`
+- **Cause**: The loader failed or crashed before it could pin the maps.
+- **Fix**: Ensure the directory `/sys/fs/bpf/ebpf-json-pipeline` is empty or delete it and restart `ebpf-json-loader`.
 
-Before building the project, run the following checks:
+### "JSON logs are showing up as scrambled or partial"
+- **Cause**: TCP Segmentation or 64KB slot overflows.
+- **Fix**: If the JSON is larger than 64KB, it will be truncated. You may need to increase `SLOT_SIZE` in `maps.h`.
 
+---
+
+## 2. The Debugging Toolkit
+
+When things go wrong in the kernel, you can't use a standard debugger. Use these tools instead:
+
+### `bpf_printk` (The "Kernel Printf")
+You can add `bpf_printk("Value: %d\n", my_val);` to your C code. 
+To see the output, run:
 ```bash
-# 1. Kernel version
-uname -r
-
-# 2. BTF presence
-ls /sys/kernel/btf/vmlinux
-
-# 3. BPF Arena support
-grep "BPF_MAP_TYPE_ARENA" /usr/include/linux/bpf.h
-
-# 4. clang version
-clang --version
-
-# 5. libbpf version
-pkg-config --modversion libbpf
-
-# 6. bpftool presence
-bpftool version
-
-# 7. Rust toolchain (ensure nightly is available)
-rustup toolchain list
+sudo bpftool prog tracelog
+# OR
+sudo cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-## Setup Instructions
+### `bpftool map dump` (Inspecting State)
+To see what's actually inside your port filter or your shared memory:
+```bash
+sudo bpftool map dump name port_proto_filter
+```
 
-1.  **Generate vmlinux.h**:
-    ```bash
-    mkdir -p vmlinux
-    bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux/vmlinux.h
-    ```
+### `tcpdump` (The Ground Truth)
+If you aren't sure if a packet is even hitting the NIC, run:
+```bash
+sudo tcpdump -i any port 8080 -X
+```
 
-2.  **Build the Project**:
-    ```bash
-    make all
-    ```
+---
 
-## Architecture Overview
+## 3. Performance Tuning
 
-The pipeline consists of multiple layers:
-- **Layer 1 (XDP/TC)**: Fast filtering and connection tracking.
-- **Layer 2 (Capture)**: TLS (uprobes) and plaintext (socket filter) capture.
-- **Layer 3 (Data)**: Dynamic handling with `bpf_dynptr`.
-- **Layer 4 (Transport)**: `RINGBUF` and `ARENA` for high-performance data transfer to userspace.
-- **Userspace**: Rust-based decoder and config injector.
+### Adjusting Shared Memory Size
+If your server has a lot of RAM and you want to keep more history of large JSONs:
+1.  **Change Slot Count**: Increase `SLOT_COUNT` in `maps.h` from 8192 to 16384 (must be a power of two!).
+2.  **Change Slot Size**: Increase `SLOT_SIZE` from 64KB to 128KB if you have truly massive JSON blobs.
+3.  **Update Rust**: Ensure `arena_size` in `main.rs` matches the new total (Count * Size).
 
-## Deployment
+---
 
-1.  **BPF Pinning**: Maps are pinned to `/sys/fs/bpf/ebpf-json-pipeline`. Ensure the directory exists and has appropriate permissions.
-2.  **Network Interface**: Attach XDP/TC to the desired interface (e.g., `eth0` or `lo`).
+## 4. Building from Source
+
+```bash
+# 1. Clean the environment
+make clean
+
+# 2. Build everything (Kernel and Userspace)
+make all
+
+# 3. Load the pipeline onto 'eth0'
+sudo ./target/release/ebpf-json-loader eth0
+
+# 4. Start the decoder
+sudo ./target/release/ebpf-json-decoder
+```

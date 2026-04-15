@@ -1,169 +1,87 @@
 # eBPF JSON Intercept Pipeline Architecture
 
-## Core Principle: Passive Intercept Pipeline
-The fundamental design principle of this system is that it operates as a **Passive Intercept Pipeline**. The pipeline is strictly observational; it must never drop, delay, or modify non-matching traffic. Its sole purpose is to safely duplicate and inspect matching network payloads for JSON data without impacting the critical path of the network stack.
+## The Vision: High-Performance, Zero-Impact Observation
+The fundamental goal of this pipeline is to provide deep visibility into JSON traffic without the application ever knowing we are there. It is designed for **Real-Time Security Observability** on high-traffic servers.
 
 ---
 
-## Kernel Components (eBPF C)
+## 1. The Lifecycle of a Packet: A Play-by-Play
 
-The kernel-space components are responsible for high-performance, low-overhead packet inspection and capture.
+To understand the architecture, let's follow a single JSON string sent to port 8080.
 
-### 1. `xdp_edge.bpf.c` (Layer 1 XDP)
-This is the first line of defense, attaching at the eXpress Data Path (XDP) layer for maximum performance.
-- **Functionality:** Parses Ethernet, VLAN, IPv4/IPv6, TCP, and UDP headers.
-- **Filtering:** Checks incoming traffic against an IP allowlist using an LPM (Longest Prefix Match) trie and validates ports/protocols against YAML-configured filters.
-- **Protection:** Performs rate limiting to prevent overwhelming the userspace components.
-- **Action:** Always returns `XDP_PASS` to ensure traffic continues uninterrupted, regardless of whether it matches the filters.
-
-### 2. `tc_stateful.bpf.c` (Layer 1 TC)
-Attaches at the Traffic Control (TC) layer to perform deeper, stateful inspection.
-- **Functionality:** Extracts the application payload up to a maximum of 1024 bytes (`MAX_LOG_CHUNK_SIZE`).
-- **Data Capture:** Uses the `bpf_skb_load_bytes` helper to safely copy the payload into a ring buffer event structure (`log_event_t`).
-- **Export:** Submits the captured event to the BPF Ring Buffer for asynchronous userspace consumption.
-
-### 3. `uprobe_tls.bpf.c` (Layer 2 Capture)
-Designed for capturing encrypted traffic before it hits the network stack (or after decryption).
-- **Functionality:** Uses uprobes to hook into OpenSSL's `SSL_read` (and potentially `SSL_write`) functions.
-- **Data Capture:** Captures plaintext JSON payloads before they are encrypted or after they are decrypted by the application.
-- **State Management:** Utilizes an LRU (Least Recently Used) hash map for state tracking across function calls and per-CPU arrays for staging data efficiently.
-
-### 4. BPF Arena Memory Management (Shared)
-For large payloads that exceed the 1024-byte `log_event_t` limit, the pipeline utilizes **BPF Arena** (introduced in Linux 6.9).
-- **Fixed-Size Circular Buffer:** Instead of complex dynamic allocation, the pipeline manages a **1GB circular buffer** within a 4GB Arena. This ensures deterministic memory usage and high performance.
-- **Head Offset Tracking:** The kernel tracks the current write position using the `arena_state_map`.
-- **Atomic Increments:** To handle concurrent packets across multiple CPU cores safely, the kernel uses `__sync_fetch_and_add` to atomically increment the head pointer and reserve space.
-- **Relative Offsets:** The kernel calculates the relative offset from the Arena's base pointer and sends only this offset to userspace. This prevents 32-bit pointer truncation and ensures compatibility with different memory layouts.
+1.  **The Arrival (XDP)**: The packet hits the network card (NIC). Before the Linux Kernel even allocates a single byte for it, our **XDP Program** (`xdp_edge.bpf.c`) is triggered. It checks the IP and Port. If it doesn't match our config, it ignores it immediately. **Result**: Zero overhead for ignored traffic.
+2.  **The Entry (TC)**: If the packet matches, it moves into the **Traffic Control (TC)** layer. Here, `tc_stateful.bpf.c` looks at the size.
+    - **Path A (Small)**: If the packet is < 1KB, TC copies the data into the **Ring Buffer** and sends it straight to userspace.
+    - **Path B (Large)**: If the data is large, TC ignores the payload and lets it move up to the Socket layer.
+3.  **The Intercept (SK_MSG)**: As the application (like a Web Server) reads the data from its socket, our **SK_MSG Program** (`sk_msg_intercept.bpf.c`) wakes up. 
+    - It intercepts the large payload *inside the socket buffer*.
+    - It reserves a 64KB slot in our **512MB Fixed-Slot Array**.
+    - It copies the data into that slot and sends an "alert" (a small event with an offset) to userspace.
+4.  **The Processing (Rust Decoder)**: The **Rust Decoder** receives the alert from the Ring Buffer. It uses the provided `offset` to look directly into the shared memory slot. It parses the JSON and outputs the logs.
 
 ---
 
-## Userspace Components (Rust)
+## 2. Design Strategy: Why the Dual Path?
 
-The userspace components manage the lifecycle of the eBPF programs, provide configuration, and process the captured data.
+Why not use the same path for everything? Because networking has different constraints at different layers.
 
-### 1. Loader (`userspace/loader` -> `ebpf-json-loader`)
-The control plane for the pipeline.
-- **Configuration:** Parses rules and filters from `config/intercept.yaml`.
-- **Safety Mechanisms:** 
-  - Implements active SSH session detection to prevent locking out administrators.
-  - Features a 5-minute "dead man's switch" to automatically unload the pipeline if the loader crashes or is ungracefully terminated.
-- **Deployment:** 
-  - Loads the compiled BPF objects into the kernel.
-  - Pins shared maps (e.g., `log_ringbuf`, `port_proto_filter`) to the BPF virtual file system at `/sys/fs/bpf/ebpf-json-pipeline` for cross-process access.
-  - Maps the BPF Arena into userspace memory, providing the base pointer to the Decoder.
-  - Safely attaches the TC program first, followed by the XDP program to ensure the pipeline is fully ready before edge traffic is processed.
+### The Ring Buffer (For Speed & Noise)
+- **Used by**: TC and XDP.
+- **Why**: It is blazingly fast but requires fixed-size events. 
+- **Analogy**: A high-speed conveyor belt for small boxes. If a box is too big, the belt jams.
 
-### 2. Decoder (`userspace/decoder` -> `ebpf-json-decoder`)
-The data plane consumer.
-- **Connection:** Attaches to the pinned `log_ringbuf` map created by the Loader.
-- **Processing:** Runs a highly optimized, dedicated thread for polling events from the ring buffer.
-- **Decoding:** 
-  - Safely casts raw ring buffer bytes to the `log_event_t` structure.
-  - Extracts the dynamic payload length.
-  - **Arena Resolution:** If the event indicates an Arena-backed payload, the decoder adds the relative offset to its local mmap base pointer to resolve the absolute memory address.
-  - **Safety Checks:** Implements strict Rust-level bounds checking to ensure `offset + data_len <= 4GB` before attempting to read from the Arena, protecting against kernel-side corruption or malformed offsets.
-  - Parses the payload as JSON using `simd-json` (leveraging AVX2 instructions for speed) or falling back to `serde_json`.
+### The Fixed-Slot Array (For Depth & Large Data)
+- **Used by**: SK_MSG.
+- **Why**: Large payloads (up to 64KB) are too big for the conveyor belt. We instead put them into a "Parking Garage" (the 512MB shared array). We only send a tiny "Parking Ticket" (the offset) over the conveyor belt.
+- **Analogy**: We leave the heavy pallet in the warehouse and just hand the forklift operator a slip of paper telling them which shelf to look at.
 
 ---
 
-## eBPF-to-Rust Interaction Boundary
+## 3. Map Structures: The "Storage Closets"
 
-The interaction between the kernel eBPF programs and the Rust userspace components is critical for performance and safety.
+eBPF programs are stateless, so they use **Maps** to share data.
 
-### Architecture Flow Diagram
+| Map Name | Type | Purpose |
+| :--- | :--- | :--- |
+| `port_proto_filter` | **HASH** | A dictionary of ports we care about (e.g., 443, 8080). |
+| `large_payload_array` | **ARRAY** | The 512MB shared memory block (The "Parking Garage"). |
+| `log_ringbuf` | **RINGBUF** | The communication channel from Kernel to Rust. |
+| `sockmap` | **SOCKHASH** | A "phone book" of all active TCP connections. |
 
+---
+
+## 4. Component Flow Diagrams
+
+### Phase 1: Setup & Configuration
+```mermaid
+graph LR
+    YAML[config/intercept.yaml] --> Loader[ebpf-json-loader]
+    Loader --> MapFilter[(Port Filter Map)]
+    Loader --> MapShared[(Shared Array)]
+    Loader -- Pins Maps --> FS[/sys/fs/bpf/...]
+```
+
+### Phase 2: Real-Time Interception
 ```mermaid
 graph TD
-    subgraph Userspace
-        YAML[config/intercept.yaml]
-        Loader(Loader: ebpf-json-loader)
-        Decoder(Decoder: ebpf-json-decoder)
-    end
-
-    subgraph Kernel
-        MapFilter[(port_proto_filter Map)]
-        MapRingBuf[(log_ringbuf Map)]
-        
-        XDP[XDP: xdp_edge.bpf.c]
-        TC[TC: tc_stateful.bpf.c]
-        Uprobe[Uprobe: uprobe_tls.bpf.c]
-    end
-
-    Network((Network Traffic)) --> XDP
-    XDP --> TC
-    App((Application)) -. SSL_read .-> Uprobe
+    Packet((Packet On Wire)) --> XDP[XDP: Filtering]
+    XDP --> TC[TC: Small Capture]
+    TC -- <1KB --> RingBuf[(Ring Buffer)]
     
-    YAML --> Loader
-    Loader -- Loads Config --> MapFilter
+    Packet --> Stack((Kernel Stack))
+    Stack --> AppSocket((vFS Socket))
+    AppSocket --> SKMSG[SK_MSG: Large Intercept]
+    SKMSG -- >1KB --> SharedMem[(512MB Array)]
+    SKMSG -- Offset Only --> RingBuf
     
-    XDP -. Reads .-> MapFilter
-    TC -. Reads .-> MapFilter
-    
-    TC -- Submits Event --> MapRingBuf
-    Uprobe -- Submits Event --> MapRingBuf
-    
-    MapRingBuf -- Polls --> Decoder
-    
-    classDef rust fill:#dea584,stroke:#333,stroke-width:2px,color:black;
-    classDef bpf fill:#8fb0c6,stroke:#333,stroke-width:2px,color:black;
-    classDef map fill:#f9d0c4,stroke:#333,stroke-width:2px,color:black;
-    
-    class Loader,Decoder rust;
-    class XDP,TC,Uprobe bpf;
-    class MapFilter,MapRingBuf map;
+    RingBuf --> Decoder[ebpf-json-decoder]
+    SharedMem --> Decoder
 ```
 
-### Control Flow (Configuration)
-1. The **Rust Loader** reads `config/intercept.yaml`.
-2. It updates the `port_proto_filter` BPF Hash Map with the parsed rules.
-3. The **XDP and TC programs** read this map for every packet to make fast, in-kernel decisions about whether to intercept and copy the payload.
+---
 
-### Data Flow (Capture)
-1. Packets arrive and are processed by XDP/TC, or application buffers are intercepted by Uprobes.
-2. Matching payloads are packaged into a `log_event_t` struct and submitted to the `log_ringbuf` BPF Ring Buffer.
-3. The **Rust Decoder** continuously polls `log_ringbuf`, retrieves the raw bytes, and processes the JSON.
-
-### C Struct Mapping (The Contract)
-For the Rust Decoder to safely parse the data coming from the kernel, there must be a strict memory layout agreement. The Rust side relies on an exact `#[repr(C)]` match of the kernel's `log_event_t`.
-
-**Kernel (C):**
-```c
-#define MAX_LOG_CHUNK_SIZE 1024
-
-typedef struct {
-    __u32 conn_id;
-    __u32 pid;
-    __u32 tid;
-    __u64 ts_ns;
-    __u8  is_arena_ptr;
-    __u8  pad[3];
-    __u32 arena_offset;
-    __u32 data_len;
-    __u8  data[MAX_LOG_CHUNK_SIZE];
-} log_event_t;
-```
-
-**Userspace (Rust):**
-```rust
-const MAX_LOG_CHUNK_SIZE: usize = 1024;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct LogEvent {
-    pub conn_id: u32,
-    pub pid: u32,
-    pub tid: u32,
-    pub ts_ns: u64,
-    pub is_arena_ptr: u8,
-    pub pad: [u8; 3],
-    pub arena_offset: u32,
-    pub data_len: u32,
-    pub data: [u8; MAX_LOG_CHUNK_SIZE],
-}
-```
-// Inside the decoder ring buffer callback:
-// The decoder casts the raw byte slice to this struct, safely reads the
-// header fields (pid, tid, ts_ns), and then slices the `data` array exactly 
-// up to `data_len` to avoid parsing trailing garbage before handing it to simd-json.
-```it to simd-json.
-```
+## 5. Security & Safety First
+The pipeline is designed to be "Fail-Passive":
+- If the Ring Buffer is full, it drops the *log*, not the *packet*.
+- If the Shared Memory is full, it wraps around (Circular Buffer), ensuring we only lose old logs, not new network connections.
+- **Safety Switch**: The loader monitors its own health. If it dies, it unloads the filters to ensure the server remains reachable.

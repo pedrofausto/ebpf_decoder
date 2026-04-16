@@ -62,3 +62,4 @@ userspace/decoder/scratch.rs
 userspace/decoder/scratch_info.rs
 
 
+userspace/decoder/tests/parser_tests.rs

@@ -4,6 +4,8 @@ use crate::structs::log_event_t;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
+const MAX_JSON_SIZE: usize = 1024 * 1024; // 1MB limit
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GenericLog {
     #[serde(flatten)]
@@ -15,7 +17,6 @@ pub enum ParserBackend {
     SerdeJson,
 }
 
-/// Cache the parser capability detection so it only runs once
 pub fn get_parser_backend() -> &'static ParserBackend {
     static BACKEND: OnceLock<ParserBackend> = OnceLock::new();
     BACKEND.get_or_init(|| {
@@ -30,33 +31,34 @@ pub fn get_parser_backend() -> &'static ParserBackend {
 }
 
 thread_local! {
-    // Pre-allocate enough capacity for the maximum chunk size (1024 bytes)
-    // This eliminates the allocation overhead on every single packet.
-    static SIMD_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(1024));
+    static SIMD_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(MAX_JSON_SIZE));
 }
 
 pub fn parse_log(data: &[u8], backend: &ParserBackend) -> Result<GenericLog> {
+    if data.len() > MAX_JSON_SIZE {
+        bail!("JSON payload too large: {} bytes", data.len());
+    }
+
     match backend {
         ParserBackend::SimdJson => {
-            /* simd_json::from_slice requires a mutable slice. 
-               We use a thread-local buffer to avoid allocating a new Vec on every packet. */
             SIMD_BUF.with(|buf_cell| {
                 let mut buf = buf_cell.borrow_mut();
                 buf.clear();
                 buf.extend_from_slice(data);
-                Ok(simd_json::from_slice(&mut buf)?)
+                let res: GenericLog = simd_json::from_slice(&mut buf)?;
+                buf.clear(); // Robust cleanup
+                Ok(res)
             })
         }
         ParserBackend::SerdeJson => {
-            Ok(serde_json::from_slice(data)?)
+            let res: GenericLog = serde_json::from_slice(data)?;
+            Ok(res)
         }
     }
 }
 
 static ARENA_BASE: OnceLock<usize> = OnceLock::new();
 
-/// Set the base pointer for the BPF_MAP_TYPE_ARENA.
-/// This pointer is used to resolve absolute addresses from offsets.
 pub fn set_arena_base(ptr: usize) {
     let _ = ARENA_BASE.set(ptr);
 }
@@ -66,11 +68,16 @@ pub fn process_sample(data: &[u8]) -> Result<()> {
         bail!("Sample too small to contain log_event_t");
     }
 
-    let event = unsafe { &*(data.as_ptr() as *const log_event_t) };
+    // Replace unsafe pointer cast with standard field access from struct
+    let event: &log_event_t = unsafe { &*(data.as_ptr() as *const log_event_t) };
     let data_len = event.data_len as usize;
 
     if data_len == 0 {
         bail!("Invalid data_len (0) in log_event_t");
+    }
+    
+    if data_len > MAX_JSON_SIZE {
+        bail!("Event data_len too large: {}", data_len);
     }
 
     let backend = get_parser_backend();
@@ -78,19 +85,14 @@ pub fn process_sample(data: &[u8]) -> Result<()> {
     let result = if event.is_arena_ptr == 1 {
         let base_ptr = *ARENA_BASE.get().context("Arena base pointer not set")?;
         
-        // Safety: Bounds check against the 4GB mmap region to prevent out-of-bounds reads
-        // if the kernel provides a corrupted offset or length.
         let arena_size = 4 * 1024 * 1024 * 1024;
         let offset = event.arena_offset as usize;
         
         if offset + data_len > arena_size {
-            bail!("Arena access out of bounds: offset {} + len {} > {}", offset, data_len, arena_size);
+            bail!("Arena access out of bounds");
         }
 
         let ptr = (base_ptr + offset) as *const u8;
-        
-        // Safety: The BPF program uses a circular buffer strategy within the Arena.
-        // Data is valid for the duration of this call.
         let payload = unsafe { std::slice::from_raw_parts(ptr, data_len) };
         
         parse_log(payload, backend)
@@ -104,18 +106,12 @@ pub fn process_sample(data: &[u8]) -> Result<()> {
 
     match result {
         Ok(log) => {
-            /* 
-             * In a production system, this would push to a secondary pipeline 
-             * or storage backend. For now, we print to stdout.
-             */
             if let Ok(out) = serde_json::to_string(&log) {
                 println!("{}", out);
             }
         }
         Err(e) => {
-            // TCP fragmentation or 1024-byte truncation means we frequently see partial JSON.
-            // Log this at the debug level instead of failing the event processor.
-            tracing::debug!("Failed to parse JSON (fragmented or non-JSON payload): {}", e);
+            tracing::debug!("Failed to parse JSON: {}", e);
         }
     }
     

@@ -9,15 +9,15 @@ The fundamental goal of this pipeline is to provide deep visibility into JSON tr
 
 To understand the architecture, let's follow a single JSON string sent to port 8080.
 
-1.  **The Arrival (XDP)**: The packet hits the network card (NIC). Before the Linux Kernel even allocates a single byte for it, our **XDP Program** (`xdp_edge.bpf.c`) is triggered. It checks the IP and Port. If it doesn't match our config, it ignores it immediately. **Result**: Zero overhead for ignored traffic.
-2.  **The Entry (TC)**: If the packet matches, it moves into the **Traffic Control (TC)** layer. Here, `tc_stateful.bpf.c` looks at the size.
+1.  **The Arrival (XDP)**: The packet hits the network card (NIC). Before the Linux Kernel even allocates a single byte for it, our **XDP Program** (`xdp_edge.bpf.c`) is triggered. It checks the IP and Port. If it does not match config, it ignores it. If configured as `drop` or `pass`, that action is enforced immediately.
+2.  **The Entry (TC)**: If the packet matches and is not handled by XDP action gating, it moves into the **Traffic Control (TC)** layer. Here, `tc_stateful.bpf.c` validates the configured payload format for `check` and `decode`.
     - **Path A (Small)**: If the packet is < 1KB, TC copies the data into the **Ring Buffer** and sends it straight to userspace.
     - **Path B (Large)**: If the data is large, TC ignores the payload and lets it move up to the Socket layer.
 3.  **The Intercept (SK_MSG)**: As the application (like a Web Server) reads the data from its socket, our **SK_MSG Program** (`sk_msg_intercept.bpf.c`) wakes up. 
     - It intercepts the large payload *inside the socket buffer*.
     - It reserves a 64KB slot in our **512MB Fixed-Slot Array**.
     - It copies the data into that slot and sends an "alert" (a small event with an offset) to userspace.
-4.  **The Processing (Rust Decoder)**: The **Rust Decoder** receives the alert from the Ring Buffer. It uses the provided `offset` to look directly into the shared memory slot. It parses the JSON and outputs the logs.
+4.  **The Processing (Rust Decoder)**: The **Rust Decoder** receives the alert from the Ring Buffer. It uses the provided `offset` to look directly into the shared memory slot when needed. It dispatches to JSON, syslog, HTML, or plaintext parsers using the kernel-provided format metadata.
 
 ---
 
@@ -81,7 +81,9 @@ graph TD
 ---
 
 ## 5. Security & Safety First
-The pipeline is designed to be "Fail-Passive":
+The pipeline has two failure modes:
 - If the Ring Buffer is full, it drops the *log*, not the *packet*.
 - If the Shared Memory is full, it wraps around (Circular Buffer), ensuring we only lose old logs, not new network connections.
+- If config says `drop`, the packet is dropped.
+- If config says `check` or `decode` and the bounded kernel format guard sees a mismatch, the packet is dropped before userspace decode.
 - **Safety Switch**: The loader monitors its own health. If it dies, it unloads the filters to ensure the server remains reachable.

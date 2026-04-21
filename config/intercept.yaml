@@ -1,9 +1,17 @@
 intercept:
   - port: 443
     protocol: tcp
+    format: html
+    action: decode
   - port: 8080
     protocol: tcp
+    format: json
+    action: decode
   - port: 53
     protocol: udp
+    format: plain_text
+    action: check
   - port: 514
     protocol: udp
+    format: syslog
+    action: decode

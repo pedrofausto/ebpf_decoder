@@ -72,3 +72,33 @@ sudo ./target/release/ebpf-json-loader eth0
 # 4. Start the decoder
 sudo ./target/release/ebpf-json-decoder
 ```
+
+---
+
+## 5. Configuration Notes (`config/intercept.yaml`)
+
+Each `(port, protocol)` pair must define its own `format` and single `action`.
+
+Example:
+```yaml
+intercept:
+  - port: 514
+    protocol: udp
+    format: syslog
+    action: check
+```
+
+Valid values:
+- `protocol`: `tcp`, `udp`
+- `format`: `json`, `syslog`, `html`, `plain_text`
+- `action`: `decode`, `drop`, `pass`, `check`
+
+Action behavior:
+- `decode`: kernel validates the configured format, drops mismatches, and emits valid payloads to userspace for decoding.
+- `drop`: kernel drops matching packets unconditionally.
+- `pass`: kernel passes matching packets without capture or decode.
+- `check`: kernel validates the configured format, drops mismatches, and passes valid packets without decode output.
+
+Validation enforced by loader:
+- duplicate `(port, protocol)` entries are rejected
+- missing or invalid `format`/`action` values are rejected

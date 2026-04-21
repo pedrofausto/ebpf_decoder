@@ -39,52 +39,115 @@ SEC("sk_msg")
 int sk_msg_interceptor(struct sk_msg_md *msg)
 {
     __u32 data_len = msg->size;
-    
+
     /* Max packet size is 64KB. If it's larger, we clamp it to the slot size. */
     if (data_len == 0) return SK_PASS;
     if (data_len > SLOT_SIZE) data_len = SLOT_SIZE;
 
-    /* Ensure data is linear for copying. */
+    /*
+     * 1. Policy lookup: SK_MSG runs on TCP sockets, so proto is always 6.
+     * msg->local_port is the server listening port in host byte order.
+     */
+    __u16 dst_port = (__u16)msg->local_port;
+    struct port_proto_key pkey = {.port = dst_port, .proto = 6 /* IPPROTO_TCP */, .padding = 0};
+    port_proto_config_t *cfg = bpf_map_lookup_elem(&port_proto_filter, &pkey);
+
+    if (!cfg) {
+        /* Not in YAML config — pass without capture */
+        return SK_PASS;
+    }
+
+    /* 2. Action enforcement — enforce before any data processing */
+    if (cfg->action == ACTION_DROP) {
+        return SK_DROP;
+    }
+    if (cfg->action == ACTION_PASS) {
+        return SK_PASS;
+    }
+
+    /* 3. For CHECK and DECODE: linearize data, then validate format */
     if (bpf_msg_pull_data(msg, 0, data_len, 0) < 0) {
         return SK_PASS;
     }
 
-    /* Re-fetch data and data_end after pull */
     void *data = (void *)(long)msg->data;
     void *data_end = (void *)(long)msg->data_end;
     if (data + data_len > data_end) {
         return SK_PASS;
     }
 
+    /* 3a. Format check on direct data pointer using verifier-friendly bounds checks. */
+    __u8 *payload = (__u8 *)data;
+    __u8 b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0;
+
+    if (data_len > 0) {
+        if ((void *)(payload + 1) > data_end)
+            return SK_PASS;
+        b0 = payload[0];
+    }
+    if (data_len > 1) {
+        if ((void *)(payload + 2) > data_end)
+            return SK_PASS;
+        b1 = payload[1];
+    }
+    if (data_len > 2) {
+        if ((void *)(payload + 3) > data_end)
+            return SK_PASS;
+        b2 = payload[2];
+    }
+    if (data_len > 3) {
+        if ((void *)(payload + 4) > data_end)
+            return SK_PASS;
+        b3 = payload[3];
+    }
+    if (data_len > 4) {
+        if ((void *)(payload + 5) > data_end)
+            return SK_PASS;
+        b4 = payload[4];
+    }
+
+    if (!bpf_format_check(b0, b1, b2, b3, b4, cfg->format)) {
+        return SK_DROP; /* Type mismatch — drop */
+    }
+
+    /*
+     * 3b. CHECK: format valid, pass without capturing to arena or ringbuf.
+     * Pure kernel enforcement with zero pipeline cost.
+     */
+    if (cfg->action == ACTION_CHECK) {
+        return SK_PASS;
+    }
+
+    /* 4. DECODE: write payload to arena slot and emit ringbuf ticket */
     __u32 zero = 0;
     struct arena_state *state = bpf_map_lookup_elem(&arena_state_map, &zero);
     if (!state) return SK_PASS;
 
-    /* 
-     * 1. Fixed-Slot Indexing:
-     * We increment head by 1 (slot sequence number) instead of variable data_len.
+    /*
+     * Fixed-Slot Indexing: increment head by 1 (slot sequence number).
      */
     __u64 slot_seq = __sync_fetch_and_add(&state->head, 1);
     __u32 slot_idx = (__u32)(slot_seq & SLOT_MASK);
-    __u32 offset = slot_idx * SLOT_SIZE;
+    __u32 offset   = slot_idx * SLOT_SIZE;
 
     void *dst = bpf_map_lookup_elem(&large_payload_array, &slot_idx);
     if (!dst) return SK_PASS;
 
-    /* 
-     * 2. Zero-Offset Write:
-     * Since every write starts at dst (offset 0) and data_len is bounded by SLOT_SIZE,
-     * the verifier can trivially prove this is safe.
+    /*
+     * Zero-Offset Write: verifier can trivially prove safety since
+     * data_len is bounded by SLOT_SIZE and dst starts at offset 0.
      */
     bpf_probe_read_kernel(dst, data_len, data);
 
-    /* 3. Emit an event to log_ringbuf */
+    /* 5. Emit ringbuf ticket with format/action from config (not hardcoded) */
     log_event_t *event = bpf_ringbuf_reserve(&log_ringbuf, sizeof(log_event_t), 0);
     if (event) {
         event->is_arena_ptr = 1;
-        event->arena_offset = offset; // Start of the 64KB slot in the 512MB window
-        event->data_len = data_len;
-        event->ts_ns = bpf_ktime_get_ns();
+        event->arena_offset = offset;
+        event->data_len     = data_len;
+        event->ts_ns        = bpf_ktime_get_ns();
+        event->format       = cfg->format;
+        event->action       = cfg->action;
         bpf_ringbuf_submit(event, 0);
     }
 

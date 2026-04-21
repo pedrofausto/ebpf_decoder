@@ -67,13 +67,21 @@ int tc_unified_filter(struct __sk_buff *skb) {
     }
 
     /* 1. Check if this port/proto is in our YAML config */
-    struct port_proto_key pkey = {.port = dst_port, .proto = iph->protocol};
-    void *is_intercepted = bpf_map_lookup_elem(&port_proto_filter, &pkey);
-    if (!is_intercepted) {
+    struct port_proto_key pkey = {.port = dst_port, .proto = iph->protocol, .padding = 0};
+    port_proto_config_t *cfg = bpf_map_lookup_elem(&port_proto_filter, &pkey);
+    if (!cfg) {
         return TC_ACT_OK;
     }
 
-    /* 2. Capture and Send to RingBuffer */
+    /* 2. Enforce action — TC is authoritative for emit/drop decisions */
+    if (cfg->action == ACTION_DROP) {
+        return TC_ACT_SHOT;
+    }
+    if (cfg->action == ACTION_PASS) {
+        return TC_ACT_OK;
+    }
+
+    /* 3. Capture and Send to RingBuffer (only for DECODE or CHECK) */
     __u16 ip_tot_len = bpf_ntohs(iph->tot_len);
     __u16 extra_len = payload_offset - offset;
     if (ip_tot_len <= extra_len) {
@@ -81,19 +89,13 @@ int tc_unified_filter(struct __sk_buff *skb) {
     }
 
     __u32 payload_len = ip_tot_len - extra_len;
-    
+
     /* Phase 2: Delegate large payloads (> 1024) to L7 path by ignoring them */
     if (payload_len > MAX_LOG_CHUNK_SIZE) {
         return TC_ACT_OK;
     }
 
-    /* 
-     * Verifier safety: The compiler knows payload_len > 0 because of the 
-     * (ip_tot_len <= extra_len) check above, so it optimizes away any == 0 
-     * check. However, the BPF verifier is not as smart and still thinks 0 
-     * is possible, failing the bpf_skb_load_bytes call.
-     * We use a volatile read to break the compiler's knowledge.
-     */
+    /* Verifier safety: break compiler knowledge of payload_len > 0 */
     volatile __u32 v_len = payload_len;
     __u32 safe_len = v_len;
 
@@ -101,12 +103,42 @@ int tc_unified_filter(struct __sk_buff *skb) {
         return TC_ACT_OK;
     }
 
+    /*
+     * 3a. Bounded format heuristic (check/decode only).
+     *
+     * Load a small prefix from payload start into a stack buffer, then pass scalar
+     * bytes to the shared guard. This keeps the helper verifier-friendly across
+     * TC and SK_MSG.
+     * bpf_skb_load_bytes returns -EFAULT if the range is out of bounds, in
+     * which case we conservatively drop (format unknown = reject).
+     */
+    __u8 peek[16] = {};
+    __u32 peek_len = safe_len < sizeof(peek) ? safe_len : sizeof(peek);
+    if (bpf_skb_load_bytes(skb, payload_offset, peek, peek_len) < 0) {
+        return TC_ACT_SHOT; /* Cannot peek — conservatively drop */
+    }
+
+    if (!bpf_format_check(peek[0], peek[1], peek[2], peek[3], peek[4], cfg->format)) {
+        return TC_ACT_SHOT; /* Payload type mismatch — kernel drop */
+    }
+
+    /*
+     * 3b. CHECK action: format validated, no ringbuf needed.
+     * This is pure kernel enforcement — zero userspace pipeline cost.
+     */
+    if (cfg->action == ACTION_CHECK) {
+        return TC_ACT_OK;
+    }
+
+    /* 3c. DECODE action: format validated — reserve ringbuf and emit. */
     log_event_t *event = bpf_ringbuf_reserve(&log_ringbuf, sizeof(log_event_t), 0);
     if (!event) return TC_ACT_OK;
 
-    event->ts_ns = bpf_ktime_get_ns();
-    event->data_len = safe_len;
-    
+    event->ts_ns     = bpf_ktime_get_ns();
+    event->data_len  = safe_len;
+    event->format    = cfg->format;
+    event->action    = cfg->action;
+
     /* Copy payload into ringbuffer event */
     bpf_skb_load_bytes(skb, payload_offset, event->data, safe_len);
 

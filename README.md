@@ -1,6 +1,6 @@
-# eBPF JSON Log Processing Pipeline
+# eBPF Multi-Format Log Processing Pipeline
 
-Production-grade eBPF pipeline for high-performance JSON log ingestion.
+Production-grade eBPF pipeline for high-performance log ingestion across multiple payload formats.
 
 ## Architecture
 
@@ -14,8 +14,16 @@ Production-grade eBPF pipeline for high-performance JSON log ingestion.
 ## Implementation Details
 
 - **Kernel Requirement**: 6.9+ (Current: 6.10, Arena enabled).
-- **JSON Parser**: `simd-json` with AVX2 acceleration and `serde-json` fallback.
-- **Backpressure**: Three-tier system (Kernel -> Channel -> Parser).
+- **Format Pipeline**: JSON (`simd-json`/`serde-json`), syslog, HTML, and plaintext routing in userspace.
+- **Policy Enforcement**: Kernel action gates enforce `drop`, `pass`, `check`, and `decode` before userspace decode.
+
+## Configuration Contract
+
+Each `(port, protocol)` entry in `config/intercept.yaml` must now include:
+- `format`: `json` | `syslog` | `html` | `plain_text`
+- `action`: `decode` | `drop` | `pass` | `check`
+
+`decode` and `check` run a bounded kernel format guard. If the payload does not match the configured `format` (for example, an ELF/PDF/ZIP payload sent to a JSON entry), the packet is dropped before decode output is emitted. `drop` always drops, while `pass` bypasses capture/decode.
 
 ## Kernel Version Compatibility Matrix
 

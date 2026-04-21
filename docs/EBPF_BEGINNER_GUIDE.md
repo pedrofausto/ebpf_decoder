@@ -58,7 +58,7 @@ In this project, we intercept data at different layers of the kernel and pass it
 1.  **Kernel Probes (The Producers)**: Programs like `sk_msg_intercept.bpf.c` sit inside the kernel. They "hook" into events (e.g., a packet arrives, a socket message is sent).
 2.  **Shared Memory (The Maps)**: The kernel program copies data into an eBPF Map (often a `BPF_MAP_TYPE_RINGBUF` or a large array).
 3.  **User-space (The Consumer)**: A Rust program in `userspace/decoder/` reads from these maps using the `libbpf-rs` library.
-4.  **Processing**: The Rust decoder parses the data (e.g., into JSON), handles backpressure, and performs the required analysis.
+4.  **Processing**: The Rust decoder parses admitted `decode` payloads (JSON, syslog, HTML, or plaintext). Kernel action gates handle `drop`, `pass`, and `check` before decode output.
 
 ---
 

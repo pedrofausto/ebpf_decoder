@@ -38,7 +38,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 16384);
     __type(key, struct port_proto_key);
-    __type(value, __u8);
+    __type(value, port_proto_config_t);
 } port_proto_filter SEC(".maps");
 
 /* Rate limiting keyed by (src_ip, dst_port) */

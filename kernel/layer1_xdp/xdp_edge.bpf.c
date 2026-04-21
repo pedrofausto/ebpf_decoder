@@ -84,15 +84,24 @@ int xdp_edge_filter(struct xdp_md *ctx) {
         dst_port = bpf_ntohs(uh->dest);
     }
 
-    /* 2. YAML Interception Check */
+    /* 2. YAML Interception Check + Action Enforcement */
     if (dst_port != 0 && dst_port != 22) {
-        struct port_proto_key pkey = {.port = dst_port, .proto = iph->protocol};
-        void *is_intercepted = bpf_map_lookup_elem(&port_proto_filter, &pkey);
-        
-        if (!is_intercepted) {
-            /* Not an intercepted port, silently pass without logging/rate-limiting */
+        struct port_proto_key pkey = {.port = dst_port, .proto = iph->protocol, .padding = 0};
+        port_proto_config_t *cfg = bpf_map_lookup_elem(&port_proto_filter, &pkey);
+
+        if (!cfg) {
+            /* Not an intercepted port — pass without rate-limiting */
             return XDP_PASS;
         }
+
+        /* Enforce action */
+        if (cfg->action == ACTION_DROP) {
+            return XDP_DROP;
+        }
+        if (cfg->action == ACTION_PASS) {
+            return XDP_PASS;
+        }
+        /* ACTION_DECODE or ACTION_CHECK: fall through to rate-limiting and TC/SK_MSG */
     }
 
     /* 3. Rate-limiting check */

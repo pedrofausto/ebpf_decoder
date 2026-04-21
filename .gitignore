@@ -63,4 +63,3 @@ userspace/decoder/scratch_info.rs
 
 
 userspace/decoder/tests/parser_tests.rs
-.codex

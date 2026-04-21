@@ -1,12 +1,12 @@
-mod loader;
 mod config;
+mod loader;
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use clap::Parser;
 use libbpf_rs::MapCore;
-use notify::{Watcher, RecursiveMode, EventKind};
+use notify::{EventKind, RecursiveMode, Watcher};
 use std::path::Path;
-use tracing::{info, error};
+use tracing::{error, info};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -29,28 +29,34 @@ async fn main() -> Result<()> {
 
     /* 1. Initialize BPF Pipeline Access */
     let pin_path = "/sys/fs/bpf/ebpf-json-pipeline/port_proto_filter";
-    
+
     // Attempt to open the pinned map first (Passive Mode)
-    let (port_filter_map, pipeline): (Box<dyn libbpf_rs::MapCore>, Option<loader::BpfPipeline>) = if Path::new(pin_path).exists() {
-        info!("Existing pinned pipeline detected. Using shared map at {}", pin_path);
-        let map = libbpf_rs::MapHandle::from_pinned_path(pin_path)?;
-        (Box::new(map), None)
-    } else {
-        info!("No pinned pipeline found. Initializing BPF Pipeline...");
-        let p = loader::BpfPipeline::load_and_attach(&args.interface)?;
-        info!("BPF programs attached to {}", args.interface);
-        
-        // Find it in the newly loaded object
-        let map = p.xdp_obj.maps()
-            .find(|m| m.name() == "port_proto_filter")
-            .ok_or_else(|| anyhow::anyhow!("port_proto_filter map not found in XDP object"))?;
-        
-        // We need to move the pipeline handle out to keep programs alive.
-        // MapImpl is not Clone, so we create a MapHandle from its ID.
-        let info = map.info().context("Failed to get map info")?;
-        let map_handle = libbpf_rs::MapHandle::from_map_id(info.info.id)?;
-        (Box::new(map_handle), Some(p))
-    };
+    let (port_filter_map, pipeline): (Box<dyn libbpf_rs::MapCore>, Option<loader::BpfPipeline>) =
+        if Path::new(pin_path).exists() {
+            info!(
+                "Existing pinned pipeline detected. Using shared map at {}",
+                pin_path
+            );
+            let map = libbpf_rs::MapHandle::from_pinned_path(pin_path)?;
+            (Box::new(map), None)
+        } else {
+            info!("No pinned pipeline found. Initializing BPF Pipeline...");
+            let p = loader::BpfPipeline::load_and_attach(&args.interface)?;
+            info!("BPF programs attached to {}", args.interface);
+
+            // Find it in the newly loaded object
+            let map = p
+                .xdp_obj
+                .maps()
+                .find(|m| m.name() == "port_proto_filter")
+                .ok_or_else(|| anyhow::anyhow!("port_proto_filter map not found in XDP object"))?;
+
+            // We need to move the pipeline handle out to keep programs alive.
+            // MapImpl is not Clone, so we create a MapHandle from its ID.
+            let info = map.info().context("Failed to get map info")?;
+            let map_handle = libbpf_rs::MapHandle::from_map_id(info.info.id)?;
+            (Box::new(map_handle), Some(p))
+        };
 
     /* 2. Initial Config Load */
     let config_path = Path::new(&args.config);

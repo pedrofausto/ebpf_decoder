@@ -2,9 +2,9 @@
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventFormat {
-    Json     = 0,
-    Syslog   = 1,
-    Html     = 2,
+    Json = 0,
+    Syslog = 1,
+    Html = 2,
     PlainText = 3,
 }
 
@@ -24,9 +24,9 @@ impl EventFormat {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventAction {
     Decode = 0,
-    Drop   = 1,
-    Pass   = 2,
-    Check  = 3,
+    Drop = 1,
+    Pass = 2,
+    Check = 3,
 }
 
 impl EventAction {
@@ -61,8 +61,8 @@ pub struct log_event_t {
     pub tid: u32,
     pub ts_ns: u64,
     pub is_arena_ptr: u8,
-    pub format: u8,   // FORMAT_* from port_proto_config
-    pub action: u8,   // ACTION_* from port_proto_config
+    pub format: u8, // FORMAT_* from port_proto_config
+    pub action: u8, // ACTION_* from port_proto_config
     pub pad: u8,
     pub arena_offset: u32,
     pub data_len: u32,

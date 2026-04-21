@@ -40,6 +40,8 @@ Purpose: small, stable notes to reference when indexing code and answering quest
 ## Phase 1 new files (multi-format decoder)
 - Format router: `userspace/decoder/src/format_router.rs`
 - Framing layer: `userspace/decoder/src/framing.rs`
+- Stream state: `userspace/decoder/src/stream_state.rs`
+- Content classifier: `userspace/decoder/src/content_classifier.rs`
 - Output envelope: `userspace/decoder/src/output.rs`
 - Parser modules: `userspace/decoder/src/parsers/{json,syslog,html,plain}.rs`
 - Refactored dispatcher: `userspace/decoder/src/json_parser.rs` (now thin; calls router)

@@ -13,12 +13,11 @@ pub struct HtmlResult {
 
 /// Extract bounded metadata from an HTML payload.
 pub fn parse(data: &[u8]) -> Result<HtmlResult> {
-    let text = std::str::from_utf8(data)
-        .map_err(|_| anyhow::anyhow!("html: non-UTF8 payload"))?;
+    let text = std::str::from_utf8(data).map_err(|_| anyhow::anyhow!("html: non-UTF8 payload"))?;
 
     // --- Title ---
-    let title = extract_between_ascii_case_insensitive(text, "<title>", "</title>")
-        .unwrap_or_default();
+    let title =
+        extract_between_ascii_case_insensitive(text, "<title>", "</title>").unwrap_or_default();
     let title = crate::text_utils::safe_truncate(&title, MAX_TITLE_BYTES).to_string();
 
     // --- Body excerpt: strip tags, take first N bytes of text ---
@@ -36,7 +35,11 @@ pub fn parse(data: &[u8]) -> Result<HtmlResult> {
     })
 }
 
-fn extract_between_ascii_case_insensitive(original: &str, open: &str, close: &str) -> Option<String> {
+fn extract_between_ascii_case_insensitive(
+    original: &str,
+    open: &str,
+    close: &str,
+) -> Option<String> {
     let bytes = original.as_bytes();
     let open_bytes = open.as_bytes();
     let close_bytes = close.as_bytes();

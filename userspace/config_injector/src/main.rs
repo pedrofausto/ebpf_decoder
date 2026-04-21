@@ -2,7 +2,7 @@ mod structs;
 
 use anyhow::Result;
 use clap::Parser;
-use libbpf_rs::{UserRingBuffer, MapCore};
+use libbpf_rs::{MapCore, UserRingBuffer};
 use structs::filter_config_t;
 
 #[derive(Parser, Debug)]
@@ -27,14 +27,18 @@ fn main() -> Result<()> {
     println!("Updating configuration for interface: {}", args.interface);
 
     /* 1. Open the user_ringbuf map */
-    let obj = libbpf_rs::ObjectBuilder::default().open_file("kernel/layer4_transport/user_ringbuf_consumer.bpf.o")?;
+    let obj = libbpf_rs::ObjectBuilder::default()
+        .open_file("kernel/layer4_transport/user_ringbuf_consumer.bpf.o")?;
     let loaded = obj.load()?;
-    let urb_map = loaded.maps().find(|m| m.name() == "filter_config_urb").expect("filter_config_urb map not found");
+    let urb_map = loaded
+        .maps()
+        .find(|m| m.name() == "filter_config_urb")
+        .expect("filter_config_urb map not found");
 
     /* 2. Setup UserRingBuffer and sumbit config */
     let urb = UserRingBuffer::new(&urb_map)?;
     let mut reserve = urb.reserve(std::mem::size_of::<filter_config_t>())?;
-    
+
     let config = filter_config_t {
         version: 1,
         max_rate_pps: args.rate_limit,
@@ -51,7 +55,7 @@ fn main() -> Result<()> {
             std::mem::size_of::<filter_config_t>(),
         );
     }
-    
+
     let _ = urb.submit(reserve);
 
     println!("Configuration injected successfully.");

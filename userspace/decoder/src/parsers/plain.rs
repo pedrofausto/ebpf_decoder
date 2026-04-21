@@ -1,8 +1,8 @@
 //! Plaintext fallback parser.
 //! Returns a bounded raw-text representation of any payload.
 
-use anyhow::Result;
 use crate::output::ParseStatus;
+use anyhow::Result;
 
 const MAX_PLAIN_DISPLAY: usize = 4096;
 
@@ -15,7 +15,10 @@ pub struct PlainResult {
 pub fn parse(data: &[u8]) -> Result<PlainResult> {
     let text = String::from_utf8_lossy(data);
     let truncated = if text.len() > MAX_PLAIN_DISPLAY {
-        format!("{}…[truncated]", crate::text_utils::safe_truncate(&text, MAX_PLAIN_DISPLAY))
+        format!(
+            "{}…[truncated]",
+            crate::text_utils::safe_truncate(&text, MAX_PLAIN_DISPLAY)
+        )
     } else {
         text.into_owned()
     };

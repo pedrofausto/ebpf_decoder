@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use libbpf_rs::MapCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

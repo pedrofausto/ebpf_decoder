@@ -1,6 +1,6 @@
 //! Shared text processing utilities for the eBPF decoder.
 
-/// Safely truncate a string to a maximum number of bytes, ensuring the split 
+/// Safely truncate a string to a maximum number of bytes, ensuring the split
 /// occurs on a valid UTF-8 character boundary to prevent panics.
 pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {

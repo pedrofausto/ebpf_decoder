@@ -2,6 +2,7 @@
 //! Phase 1: all payloads arrive as complete frames (datagram or ringbuf slice).
 
 /// Result of a framing attempt.
+#[allow(dead_code)]
 pub enum FrameResult<'a> {
     /// A complete, parse-ready frame.
     Complete(&'a [u8]),
@@ -13,7 +14,6 @@ pub enum FrameResult<'a> {
 
 /// Strategy used to delimit payload frames.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub enum FrameStrategy {
     /// Each kernel event is a self-contained datagram.
     Datagram,
@@ -28,6 +28,7 @@ pub enum FrameStrategy {
 /// Attempt to extract a complete frame from `data` using `strategy`.
 /// Phase 1: only `Datagram` and `RawBlob` return `Complete`; others return `Partial`
 /// to signal that stream state (Phase 2) is required.
+#[allow(dead_code)]
 pub fn frame<'a>(data: &'a [u8], strategy: FrameStrategy) -> FrameResult<'a> {
     if data.is_empty() {
         return FrameResult::Empty;

@@ -1,15 +1,17 @@
-mod json_parser;
-mod structs;
+mod content_classifier;
 mod format_router;
 mod framing;
+mod json_parser;
 mod output;
 mod parsers;
+mod stream_state;
+mod structs;
 mod text_utils;
 
 use anyhow::{Context, Result};
-use libbpf_rs::{RingBufferBuilder, MapHandle, MapCore};
-use std::path::Path;
+use libbpf_rs::{MapCore, MapHandle, RingBufferBuilder};
 use std::os::fd::{AsFd, AsRawFd};
+use std::path::Path;
 use tracing::info;
 
 #[tokio::main]
@@ -32,8 +34,8 @@ async fn main() -> Result<()> {
         ));
     }
 
-    let arena_map = MapHandle::from_pinned_path(arena_pin_path)
-        .context("Failed to open pinned Arena map")?;
+    let arena_map =
+        MapHandle::from_pinned_path(arena_pin_path).context("Failed to open pinned Arena map")?;
 
     let info = arena_map.info().context("Failed to get Arena map info")?;
     let required_vma_start = info.info.map_extra as *mut libc::c_void;
@@ -82,8 +84,8 @@ async fn main() -> Result<()> {
         ));
     }
 
-    let rb_map = MapHandle::from_pinned_path(rb_pin_path)
-        .context("Failed to open pinned RingBuffer map")?;
+    let rb_map =
+        MapHandle::from_pinned_path(rb_pin_path).context("Failed to open pinned RingBuffer map")?;
 
     /* 4. Setup RingBuffer polling */
     let mut builder = RingBufferBuilder::new();

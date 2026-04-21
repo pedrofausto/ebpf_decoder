@@ -12,8 +12,8 @@ pub struct SyslogResult {
 /// Try to parse a complete syslog datagram (RFC 3164 or RFC 5424).
 /// Falls back gracefully if confidence is low.
 pub fn parse(data: &[u8]) -> Result<SyslogResult> {
-    let text = std::str::from_utf8(data)
-        .map_err(|_| anyhow::anyhow!("syslog: non-UTF8 payload"))?;
+    let text =
+        std::str::from_utf8(data).map_err(|_| anyhow::anyhow!("syslog: non-UTF8 payload"))?;
 
     // RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG
     if let Some(fields) = try_rfc5424(text) {
@@ -85,8 +85,7 @@ fn try_rfc3164(s: &str) -> Option<Value> {
     // Next token is hostname
     let mut parts = after_ts.splitn(3, ' ');
     let hostname = parts.next().unwrap_or("-");
-    let message = parts.next().unwrap_or("").to_string()
-        + parts.next().unwrap_or("");
+    let message = parts.next().unwrap_or("").to_string() + parts.next().unwrap_or("");
 
     Some(json!({
         "version":   "rfc3164",

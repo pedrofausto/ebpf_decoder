@@ -1,15 +1,15 @@
-use anyhow::{Result, anyhow, Context};
-use libbpf_rs::{ObjectBuilder, Xdp, XdpFlags, Object, MapCore, TcHookBuilder, TC_INGRESS};
-use std::os::fd::{AsFd, AsRawFd};
-use std::path::Path;
+use anyhow::{anyhow, Context, Result};
+use libbpf_rs::{MapCore, Object, ObjectBuilder, TcHookBuilder, Xdp, XdpFlags, TC_INGRESS};
+use nix::ifaddrs::getifaddrs;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::net::Ipv4Addr;
+use std::os::fd::{AsFd, AsRawFd};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
-use std::sync::atomic::{AtomicBool, Ordering};
-use nix::ifaddrs::getifaddrs;
-use tracing::{warn, info};
+use tracing::{info, warn};
 
 static CONFIRMED: AtomicBool = AtomicBool::new(false);
 
@@ -58,18 +58,26 @@ impl BpfPipeline {
         for line in reader.lines().skip(1) {
             let line = line?;
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() < 4 { continue; }
+            if parts.len() < 4 {
+                continue;
+            }
 
             let local_addr_part = parts[1];
             let state = parts[3];
 
-            if state != "01" { continue; } // 01 is ESTABLISHED
+            if state != "01" {
+                continue;
+            } // 01 is ESTABLISHED
 
             let addr_port: Vec<&str> = local_addr_part.split(':').collect();
-            if addr_port.len() != 2 { continue; }
+            if addr_port.len() != 2 {
+                continue;
+            }
 
             let port = u16::from_str_radix(addr_port[1], 16)?;
-            if port != 22 { continue; }
+            if port != 22 {
+                continue;
+            }
 
             let ip_val = u32::from_str_radix(addr_port[0], 16)?;
             // /proc/net/tcp IP is hex representation of memory order.
@@ -87,7 +95,10 @@ impl BpfPipeline {
     /// Schedule an automatic detach if not confirmed within N minutes.
     fn schedule_safety_timer(interface: String, minutes: u64) {
         thread::spawn(move || {
-            info!("SAFETY: Dead man's switch armed. XDP will detach in {} minutes unless confirmed.", minutes);
+            info!(
+                "SAFETY: Dead man's switch armed. XDP will detach in {} minutes unless confirmed.",
+                minutes
+            );
             // Wait for N minutes
             for _ in 0..(minutes * 60) {
                 thread::sleep(Duration::from_secs(1));
@@ -97,11 +108,14 @@ impl BpfPipeline {
                 }
             }
 
-            warn!("SAFETY: Safety timer expired! Detaching XDP from {}...", interface);
+            warn!(
+                "SAFETY: Safety timer expired! Detaching XDP from {}...",
+                interface
+            );
             let _ = std::process::Command::new("ip")
                 .args(["link", "set", "dev", &interface, "xdp", "off"])
                 .status();
-            
+
             warn!("SAFETY: XDP detached to prevent operator lockout. Exiting.");
             std::process::exit(1);
         });
@@ -124,17 +138,27 @@ impl BpfPipeline {
         }
 
         /* 2. Load all maps and objects first */
-        let maps = ["log_ringbuf", "port_proto_filter", "ip_allowlist", "rate_limit_map", "drop_counters", "sockmap", "large_payload_array"];
+        let maps = [
+            "log_ringbuf",
+            "port_proto_filter",
+            "stream_format_state",
+            "ip_allowlist",
+            "rate_limit_map",
+            "drop_counters",
+            "sockmap",
+            "large_payload_array",
+        ];
         if !Path::new(pin_dir).exists() {
             fs::create_dir_all(pin_dir).context("Failed to create BPF pin directory")?;
         }
 
         /* Load XDP first to establish the maps if they don't exist */
         let mut xdp_obj_builder = ObjectBuilder::default();
-        let xdp_open = xdp_obj_builder.open_file("kernel/layer1_xdp/xdp_edge.bpf.o")
+        let xdp_open = xdp_obj_builder
+            .open_file("kernel/layer1_xdp/xdp_edge.bpf.o")
             .context("Failed to open XDP BPF object")?;
         let mut xdp_loaded = xdp_open.load().context("Failed to load XDP BPF object")?;
-        
+
         for map_name in maps {
             if let Some(mut map) = xdp_loaded.maps_mut().find(|m| m.name() == map_name) {
                 let path = format!("{}/{}", pin_dir, map_name);
@@ -146,7 +170,8 @@ impl BpfPipeline {
 
         /* Load TC */
         let mut tc_obj_builder = ObjectBuilder::default();
-        let mut tc_open = tc_obj_builder.open_file("kernel/layer1_tc/tc_stateful.bpf.o")
+        let mut tc_open = tc_obj_builder
+            .open_file("kernel/layer1_tc/tc_stateful.bpf.o")
             .context("Failed to open TC BPF object")?;
         for map_name in maps {
             let path = format!("{}/{}", pin_dir, map_name);
@@ -160,7 +185,8 @@ impl BpfPipeline {
 
         /* Load SockOps */
         let mut sockops_obj_builder = ObjectBuilder::default();
-        let mut sockops_open = sockops_obj_builder.open_file("kernel/layer4_transport/cgroup_sockops.bpf.o")
+        let mut sockops_open = sockops_obj_builder
+            .open_file("kernel/layer4_transport/cgroup_sockops.bpf.o")
             .context("Failed to open SockOps BPF object")?;
         for map_name in maps {
             let path = format!("{}/{}", pin_dir, map_name);
@@ -170,18 +196,21 @@ impl BpfPipeline {
                 }
             }
         }
-        let mut sockops_loaded = sockops_open.load().context("Failed to load SockOps BPF object")?;
+        let mut sockops_loaded = sockops_open
+            .load()
+            .context("Failed to load SockOps BPF object")?;
         // Pin sockmap if it wasn't in XDP
         if let Some(mut map) = sockops_loaded.maps_mut().find(|m| m.name() == "sockmap") {
-             let path = format!("{}/{}", pin_dir, "sockmap");
-             if !Path::new(&path).exists() {
-                 let _ = map.pin(&path);
-             }
+            let path = format!("{}/{}", pin_dir, "sockmap");
+            if !Path::new(&path).exists() {
+                let _ = map.pin(&path);
+            }
         }
 
         /* Load SK_MSG */
         let mut sk_msg_obj_builder = ObjectBuilder::default();
-        let mut sk_msg_open = sk_msg_obj_builder.open_file("kernel/layer4_transport/sk_msg_intercept.bpf.o")
+        let mut sk_msg_open = sk_msg_obj_builder
+            .open_file("kernel/layer4_transport/sk_msg_intercept.bpf.o")
             .context("Failed to open SK_MSG BPF object")?;
         for map_name in maps {
             let path = format!("{}/{}", pin_dir, map_name);
@@ -191,28 +220,35 @@ impl BpfPipeline {
                 }
             }
         }
-        let mut sk_msg_loaded = sk_msg_open.load().context("Failed to load SK_MSG BPF object")?;
+        let mut sk_msg_loaded = sk_msg_open
+            .load()
+            .context("Failed to load SK_MSG BPF object")?;
         // Pin large_payload_array if it wasn't in others
-        if let Some(mut map) = sk_msg_loaded.maps_mut().find(|m| m.name() == "large_payload_array") {
-             let path = format!("{}/{}", pin_dir, "large_payload_array");
-             if !Path::new(&path).exists() {
-                 let _ = map.pin(&path);
-             }
+        if let Some(mut map) = sk_msg_loaded
+            .maps_mut()
+            .find(|m| m.name() == "large_payload_array")
+        {
+            let path = format!("{}/{}", pin_dir, "large_payload_array");
+            if !Path::new(&path).exists() {
+                let _ = map.pin(&path);
+            }
         }
 
         let if_index = nix::net::if_::if_nametoindex(interface)? as i32;
 
         /* 3. Attach TC first */
-        let tc_prog = tc_loaded.progs().find(|p| p.name() == "tc_unified_filter")
+        let tc_prog = tc_loaded
+            .progs()
+            .find(|p| p.name() == "tc_unified_filter")
             .ok_or_else(|| anyhow!("TC program 'tc_unified_filter' not found"))?;
-        
+
         let mut tc_builder = TcHookBuilder::new(tc_prog.as_fd());
         tc_builder
             .ifindex(if_index)
             .replace(true)
             .handle(1)
             .priority(1);
-        
+
         let mut tc_hook = tc_builder.hook(TC_INGRESS);
         tc_hook.create().context("Failed to create TC hook")?;
         if let Err(e) = tc_hook.attach() {
@@ -221,40 +257,54 @@ impl BpfPipeline {
         }
 
         /* 4. Attach SockOps and SK_MSG */
-        let sockops_prog = sockops_loaded.progs_mut().find(|p| p.name() == "bpf_sockmap_ops")
+        let sockops_prog = sockops_loaded
+            .progs_mut()
+            .find(|p| p.name() == "bpf_sockmap_ops")
             .ok_or_else(|| anyhow!("Sockops program 'bpf_sockmap_ops' not found"))?;
         let cgroup_path = "/sys/fs/cgroup";
         let cgroup_file = fs::File::open(cgroup_path)
             .with_context(|| format!("Failed to open cgroup root at {}", cgroup_path))?;
-        let sockops_link = sockops_prog.attach_cgroup(cgroup_file.as_raw_fd())
+        let sockops_link = sockops_prog
+            .attach_cgroup(cgroup_file.as_raw_fd())
             .context("Failed to attach SockOps program to cgroup")?;
         links.push(sockops_link);
 
-        let sk_msg_prog = sk_msg_loaded.progs().find(|p| p.name() == "sk_msg_interceptor")
+        let sk_msg_prog = sk_msg_loaded
+            .progs()
+            .find(|p| p.name() == "sk_msg_interceptor")
             .ok_or_else(|| anyhow!("SK_MSG program 'sk_msg_interceptor' not found"))?;
-        let sockmap = sockops_loaded.maps().find(|m| m.name() == "sockmap")
+        let sockmap = sockops_loaded
+            .maps()
+            .find(|m| m.name() == "sockmap")
             .ok_or_else(|| anyhow!("Map 'sockmap' not found in SockOps object"))?;
-        
+
         unsafe {
             let ret = libbpf_sys::bpf_prog_attach(
                 sk_msg_prog.as_fd().as_raw_fd(),
                 sockmap.as_fd().as_raw_fd(),
                 libbpf_sys::BPF_SK_MSG_VERDICT,
-                0
+                0,
             );
             if ret < 0 {
-                return Err(anyhow!("Failed to attach SK_MSG program: {}", std::io::Error::last_os_error()));
+                return Err(anyhow!(
+                    "Failed to attach SK_MSG program: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
         }
 
         /* 5. Finally, attach XDP as the last step */
-        let xdp_prog = xdp_loaded.progs().find(|p| p.name() == "xdp_edge_filter")
+        let xdp_prog = xdp_loaded
+            .progs()
+            .find(|p| p.name() == "xdp_edge_filter")
             .ok_or_else(|| anyhow!("XDP program 'xdp_edge_filter' not found"))?;
-        
+
         let xdp = Xdp::new(xdp_prog.as_fd());
         if let Err(e) = xdp.attach(if_index, XdpFlags::UPDATE_IF_NOEXIST) {
             warn!("XDP attachment failed, cleaning up TC hook...");
-            let _ = tc_hook.detach().context("Failed to detach TC hook during XDP attach failure")?;
+            let _ = tc_hook
+                .detach()
+                .context("Failed to detach TC hook during XDP attach failure")?;
             let _ = tc_hook.destroy();
             return Err(e).context("Failed to attach XDP program");
         }
@@ -262,7 +312,7 @@ impl BpfPipeline {
         /* 6. Schedule dead man's switch (5 minute safety window) */
         Self::schedule_safety_timer(interface.to_string(), 5);
 
-        Ok(Self { 
+        Ok(Self {
             links,
             xdp_obj: xdp_loaded,
             tc_obj: tc_loaded,

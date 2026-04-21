@@ -28,6 +28,7 @@ sudo bpftool prog load kernel/layer1_tc/tc_stateful.bpf.o $PIN_DIR/obj_tc \
     type classifier \
     map name log_ringbuf pinned $PIN_DIR/log_ringbuf \
     map name port_proto_filter pinned $PIN_DIR/port_proto_filter \
+    map name stream_format_state pinned $PIN_DIR/stream_format_state \
     map name ip_allowlist pinned $PIN_DIR/ip_allowlist \
     map name rate_limit_map pinned $PIN_DIR/rate_limit_map \
     map name drop_counters pinned $PIN_DIR/drop_counters

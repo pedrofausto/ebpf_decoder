@@ -76,38 +76,46 @@ int sk_msg_interceptor(struct sk_msg_md *msg)
         return SK_PASS;
     }
 
-    /* 3a. Format check on direct data pointer using verifier-friendly bounds checks. */
-    __u8 *payload = (__u8 *)data;
-    __u8 b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0;
+    __u32 conn_id = msg->remote_ip4 ^ msg->local_ip4 ^
+        msg->remote_port ^ (((__u32)msg->local_port) << 16) ^ (6 << 24);
+    __u8 fmt = cfg->format;
+    __u8 *stream_fmt = bpf_map_lookup_elem(&stream_format_state, &conn_id);
 
-    if (data_len > 0) {
-        if ((void *)(payload + 1) > data_end)
-            return SK_PASS;
-        b0 = payload[0];
-    }
-    if (data_len > 1) {
-        if ((void *)(payload + 2) > data_end)
-            return SK_PASS;
-        b1 = payload[1];
-    }
-    if (data_len > 2) {
-        if ((void *)(payload + 3) > data_end)
-            return SK_PASS;
-        b2 = payload[2];
-    }
-    if (data_len > 3) {
-        if ((void *)(payload + 4) > data_end)
-            return SK_PASS;
-        b3 = payload[3];
-    }
-    if (data_len > 4) {
-        if ((void *)(payload + 5) > data_end)
-            return SK_PASS;
-        b4 = payload[4];
-    }
+    if (!stream_fmt || *stream_fmt != fmt) {
+        /* 3a. Format check on direct data pointer using verifier-friendly bounds checks. */
+        __u8 *payload = (__u8 *)data;
+        __u8 b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0;
 
-    if (!bpf_format_check(b0, b1, b2, b3, b4, cfg->format)) {
-        return SK_DROP; /* Type mismatch — drop */
+        if (data_len > 0) {
+            if ((void *)(payload + 1) > data_end)
+                return SK_PASS;
+            b0 = payload[0];
+        }
+        if (data_len > 1) {
+            if ((void *)(payload + 2) > data_end)
+                return SK_PASS;
+            b1 = payload[1];
+        }
+        if (data_len > 2) {
+            if ((void *)(payload + 3) > data_end)
+                return SK_PASS;
+            b2 = payload[2];
+        }
+        if (data_len > 3) {
+            if ((void *)(payload + 4) > data_end)
+                return SK_PASS;
+            b3 = payload[3];
+        }
+        if (data_len > 4) {
+            if ((void *)(payload + 5) > data_end)
+                return SK_PASS;
+            b4 = payload[4];
+        }
+
+        if (!bpf_format_check(b0, b1, b2, b3, b4, fmt)) {
+            return SK_DROP; /* Type mismatch — drop */
+        }
+        bpf_map_update_elem(&stream_format_state, &conn_id, &fmt, BPF_ANY);
     }
 
     /*
@@ -142,12 +150,16 @@ int sk_msg_interceptor(struct sk_msg_md *msg)
     /* 5. Emit ringbuf ticket with format/action from config (not hardcoded) */
     log_event_t *event = bpf_ringbuf_reserve(&log_ringbuf, sizeof(log_event_t), 0);
     if (event) {
+        event->conn_id      = conn_id;
+        event->pid          = 0;
+        event->tid          = 0;
         event->is_arena_ptr = 1;
         event->arena_offset = offset;
         event->data_len     = data_len;
         event->ts_ns        = bpf_ktime_get_ns();
         event->format       = cfg->format;
         event->action       = cfg->action;
+        event->pad          = 0;
         bpf_ringbuf_submit(event, 0);
     }
 

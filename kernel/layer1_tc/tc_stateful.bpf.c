@@ -40,6 +40,7 @@ int tc_unified_filter(struct __sk_buff *skb) {
         return TC_ACT_OK;
 
     __u16 dst_port = 0;
+    __u16 src_port = 0;
     __u32 payload_offset = 0;
 
     if (iph->protocol == IPPROTO_TCP) {
@@ -54,12 +55,14 @@ int tc_unified_filter(struct __sk_buff *skb) {
             th = (void *)(iph + 1);
             if ((void *)(th + 1) > data_end) return TC_ACT_OK;
         }
+        src_port = bpf_ntohs(th->source);
         dst_port = bpf_ntohs(th->dest);
         payload_offset = offset + sizeof(struct iphdr) + (th->doff * 4);
     } else if (iph->protocol == IPPROTO_UDP) {
         struct udphdr *uh = (void *)(iph + 1);
         if ((void *)(uh + 1) > data_end)
             return TC_ACT_OK;
+        src_port = bpf_ntohs(uh->source);
         dst_port = bpf_ntohs(uh->dest);
         payload_offset = offset + sizeof(struct iphdr) + sizeof(struct udphdr);
     } else {
@@ -103,23 +106,41 @@ int tc_unified_filter(struct __sk_buff *skb) {
         return TC_ACT_OK;
     }
 
-    /*
-     * 3a. Bounded format heuristic (check/decode only).
-     *
-     * Load a small prefix from payload start into a stack buffer, then pass scalar
-     * bytes to the shared guard. This keeps the helper verifier-friendly across
-     * TC and SK_MSG.
-     * bpf_skb_load_bytes returns -EFAULT if the range is out of bounds, in
-     * which case we conservatively drop (format unknown = reject).
-     */
-    __u8 peek[16] = {};
-    __u32 peek_len = safe_len < sizeof(peek) ? safe_len : sizeof(peek);
-    if (bpf_skb_load_bytes(skb, payload_offset, peek, peek_len) < 0) {
-        return TC_ACT_SHOT; /* Cannot peek — conservatively drop */
+    __u32 conn_id = 0;
+    if (iph->protocol == IPPROTO_TCP) {
+        conn_id = iph->saddr ^ iph->daddr ^
+            (((__u32)src_port) << 16 | dst_port) ^
+            (((__u32)iph->protocol) << 24);
     }
 
-    if (!bpf_format_check(peek[0], peek[1], peek[2], peek[3], peek[4], cfg->format)) {
-        return TC_ACT_SHOT; /* Payload type mismatch — kernel drop */
+    __u8 fmt = cfg->format;
+    __u8 *stream_fmt = 0;
+    if (conn_id != 0) {
+        stream_fmt = bpf_map_lookup_elem(&stream_format_state, &conn_id);
+    }
+
+    if (!stream_fmt || *stream_fmt != fmt) {
+        /*
+         * 3a. Bounded format heuristic (check/decode only).
+         *
+         * Load a small prefix from payload start into a stack buffer, then pass scalar
+         * bytes to the shared guard. This keeps the helper verifier-friendly across
+         * TC and SK_MSG.
+         * bpf_skb_load_bytes returns -EFAULT if the range is out of bounds, in
+         * which case we conservatively drop (format unknown = reject).
+         */
+        __u8 peek[16] = {};
+        __u32 peek_len = safe_len < sizeof(peek) ? safe_len : sizeof(peek);
+        if (bpf_skb_load_bytes(skb, payload_offset, peek, peek_len) < 0) {
+            return TC_ACT_SHOT; /* Cannot peek — conservatively drop */
+        }
+
+        if (!bpf_format_check(peek[0], peek[1], peek[2], peek[3], peek[4], fmt)) {
+            return TC_ACT_SHOT; /* Payload type mismatch — kernel drop */
+        }
+        if (conn_id != 0) {
+            bpf_map_update_elem(&stream_format_state, &conn_id, &fmt, BPF_ANY);
+        }
     }
 
     /*
@@ -134,10 +155,16 @@ int tc_unified_filter(struct __sk_buff *skb) {
     log_event_t *event = bpf_ringbuf_reserve(&log_ringbuf, sizeof(log_event_t), 0);
     if (!event) return TC_ACT_OK;
 
-    event->ts_ns     = bpf_ktime_get_ns();
-    event->data_len  = safe_len;
-    event->format    = cfg->format;
-    event->action    = cfg->action;
+    event->conn_id      = conn_id;
+    event->pid          = 0;
+    event->tid          = 0;
+    event->ts_ns        = bpf_ktime_get_ns();
+    event->is_arena_ptr = 0;
+    event->format       = cfg->format;
+    event->action       = cfg->action;
+    event->pad          = 0;
+    event->arena_offset = 0;
+    event->data_len     = safe_len;
 
     /* Copy payload into ringbuffer event */
     bpf_skb_load_bytes(skb, payload_offset, event->data, safe_len);

@@ -43,11 +43,13 @@ Notes:
 | IDX-K-TC-FILTER | `kernel/layer1_tc/tc_stateful.bpf.c:71` | `port_proto_filter` lookup | Stateful/size routing |
 | IDX-K-TC-EMIT | `kernel/layer1_tc/tc_stateful.bpf.c:104` | `bpf_ringbuf_reserve` | Emits `log_event_t` to ringbuf |
 | IDX-K-TC-MISMATCH | `kernel/layer1_tc/tc_stateful.bpf.c:120` | `bpf_format_check(...)` | Drops `check`/`decode` packets with mismatched payload prefix |
+| IDX-K-TC-CONNID | `kernel/layer1_tc/tc_stateful.bpf.c:137` | `event->conn_id` | Populates TCP stream key for userspace framing |
 | IDX-K-TC-TS | `kernel/layer1_tc/tc_stateful.bpf.c:107` | `event->ts_ns` | Kernel event timestamp |
 | IDX-K-SKMSG-SLOTS | `kernel/layer4_transport/sk_msg_intercept.bpf.c:34` | `SLOT_*` | Arena slot sizing/mask |
 | IDX-K-SKMSG-COPY | `kernel/layer4_transport/sk_msg_intercept.bpf.c:71` | `large_payload_array` lookup | Copies payload into arena slot |
 | IDX-K-SKMSG-EMIT | `kernel/layer4_transport/sk_msg_intercept.bpf.c:82` | `log_ringbuf` reserve | Emits arena offset ticket |
 | IDX-K-SKMSG-MISMATCH | `kernel/layer4_transport/sk_msg_intercept.bpf.c:86` | `bpf_format_check(...)` | Drops large TCP payloads with mismatched configured format |
+| IDX-K-SKMSG-CONNID | `kernel/layer4_transport/sk_msg_intercept.bpf.c:144` | `event->conn_id` | Populates large-payload TCP stream key |
 | IDX-K-SKMSG-TS | `kernel/layer4_transport/sk_msg_intercept.bpf.c:87` | `event->ts_ns` | Kernel timestamp for large path |
 | IDX-K-UPROBE-TS | `kernel/layer2_capture/uprobe_tls.bpf.c:63` | `event->ts_ns` | Timestamp for TLS uprobe events |
 
@@ -56,6 +58,8 @@ Notes:
 |---|---|---|---|
 | IDX-UDEC-ROUTER | `userspace/decoder/src/format_router.rs:1` | `decode_payload()` | Central format dispatcher (hint → sniff → fallback) |
 | IDX-UDEC-FRAMING | `userspace/decoder/src/framing.rs:1` | `frame()` | Framing strategy selector (Datagram/Newline/OctetCounted/RawBlob) |
+| IDX-UDEC-STREAM | `userspace/decoder/src/stream_state.rs:1` | `StreamState::frames_for_event()` | Bounded TCP stream buffering; drains newline and octet-counted frames |
+| IDX-UDEC-CLASSIFY | `userspace/decoder/src/content_classifier.rs:1` | `classify()` | Userspace signature/text-shape classifier before strict decode |
 | IDX-UDEC-OUTPUT | `userspace/decoder/src/output.rs:1` | `DecodedEvent` | Normalized output envelope + `emit()` + `format_latency()` |
 | IDX-UDEC-P-JSON | `userspace/decoder/src/parsers/json.rs:1` | `parse()` | JSON parser (AVX2 simd-json + serde fallback) extracted from json_parser.rs |
 | IDX-UDEC-P-PLAIN | `userspace/decoder/src/parsers/plain.rs:1` | `parse()` | Plaintext fallback (lossy UTF-8, bounded 4 KB display) |

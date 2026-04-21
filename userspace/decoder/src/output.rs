@@ -1,7 +1,7 @@
 //! Normalized output envelope for all decoder formats.
 
-use serde::{Deserialize, Serialize};
 use crate::structs::EventFormat;
+use serde::{Deserialize, Serialize};
 
 /// End result emitted (stdout JSON line) for every decoded event.
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,6 +16,9 @@ pub struct DecodedEvent {
     pub status: ParseStatus,
     /// Action for this event (from kernel decision).
     pub action: EventAction,
+    /// Userspace content classification result for the emitted frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classification: Option<ClassificationMetadata>,
     /// Parsed fields or bounded raw text, depending on format.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Value>,
@@ -44,27 +47,60 @@ pub enum EventAction {
 /// Convert kernel EventFormat into DetectedFormat for router dispatch.
 pub fn format_from_event(ef: EventFormat) -> DetectedFormat {
     match ef {
-        EventFormat::Json     => DetectedFormat::Json,
-        EventFormat::Syslog   => DetectedFormat::Syslog,
-        EventFormat::Html     => DetectedFormat::Html,
+        EventFormat::Json => DetectedFormat::Json,
+        EventFormat::Syslog => DetectedFormat::Syslog,
+        EventFormat::Html => DetectedFormat::Html,
         EventFormat::PlainText => DetectedFormat::PlainText,
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PayloadSource {
     RingbufInline,
     Arena,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ParseStatus {
     Ok,
     ParseError,
     TooLarge,
     Unsupported,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ClassificationMetadata {
+    pub verdict: ClassificationVerdict,
+    pub observed: ContentKind,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassificationVerdict {
+    Match,
+    Mismatch,
+    Unknown,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentKind {
+    Json,
+    Syslog,
+    Html,
+    PlainText,
+    Elf,
+    Pe,
+    Pdf,
+    Zip,
+    Gzip,
+    Png,
+    Jpeg,
+    Binary,
+    Unknown,
 }
 
 /// Format a latency duration (nanoseconds) into a human-readable string.

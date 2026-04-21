@@ -4,18 +4,23 @@
 //! This module is the ringbuf callback entry point. It reads action/format from
 //! the kernel-populated log_event_t and applies the action gate before decoding.
 
-use anyhow::{Context, Result, bail};
-use std::sync::OnceLock;
+use anyhow::{bail, Context, Result};
+use std::sync::{Mutex, OnceLock};
 
-use crate::structs::{log_event_t, EventFormat, EventAction};
+use crate::content_classifier::classify;
 use crate::format_router::decode_payload;
-use crate::framing::{frame, FrameStrategy};
-use crate::output::{self, DecodedEvent, EventAction as OutputAction, PayloadSource, ParseStatus, format_from_event};
+use crate::output::{
+    self, format_from_event, ClassificationVerdict, DecodedEvent, DetectedFormat,
+    EventAction as OutputAction, ParseStatus, PayloadSource,
+};
+use crate::stream_state::{StreamContext, StreamState};
+use crate::structs::{log_event_t, EventAction, EventFormat};
 
 pub const MAX_EVENT_PAYLOAD_SIZE: usize = 1024 * 1024; // 1MB global cap
 
 static ARENA_BASE: OnceLock<usize> = OnceLock::new();
 static ARENA_SIZE: OnceLock<usize> = OnceLock::new();
+static STREAM_STATE: OnceLock<Mutex<StreamState>> = OnceLock::new();
 
 pub fn set_arena_layout(ptr: usize, size: usize) {
     let _ = ARENA_BASE.set(ptr);
@@ -62,26 +67,29 @@ pub fn process_sample(data: &[u8]) -> Result<()> {
         let arena_size = *ARENA_SIZE.get().context("Arena size not set")?;
         let offset = event.arena_offset as usize;
 
-        let end = offset.checked_add(data_len)
+        let end = offset
+            .checked_add(data_len)
             .context("Arena offset + len overflow")?;
 
         if end > arena_size {
-            bail!("Arena access out of bounds: end={} > size={}", end, arena_size);
+            bail!(
+                "Arena access out of bounds: end={} > size={}",
+                end,
+                arena_size
+            );
         }
         let ptr = (base_ptr + offset) as *const u8;
         let slice = unsafe { std::slice::from_raw_parts(ptr, data_len) };
         (slice, PayloadSource::Arena)
     } else {
         if data_len > event.data.len() {
-            bail!("Invalid data_len ({}) > inline buffer ({})", data_len, event.data.len());
+            bail!(
+                "Invalid data_len ({}) > inline buffer ({})",
+                data_len,
+                event.data.len()
+            );
         }
         (&event.data[..data_len], PayloadSource::RingbufInline)
-    };
-
-    // --- Framing (Phase 1: datagram) ---
-    let framed = match frame(payload, FrameStrategy::Datagram) {
-        crate::framing::FrameResult::Complete(f) => f,
-        _ => bail!("Unexpected partial frame in datagram mode"),
     };
 
     // --- Latency ---
@@ -91,34 +99,105 @@ pub fn process_sample(data: &[u8]) -> Result<()> {
     let now_ns = ts.tv_sec() as u64 * 1_000_000_000 + ts.tv_nsec() as u64;
     let latency_ns = now_ns.saturating_sub(event.ts_ns);
 
-    // --- Route: prefer expected format from kernel metadata, not sniff-first ---
-    let hint = Some(format_from_event(event_format));
-    let result = decode_payload(framed, hint);
-
     // --- Emit: only for ACTION_DECODE; ACTION_CHECK skips output ---
     let output_action = match event_action {
         EventAction::Decode => OutputAction::Decode,
-        EventAction::Check  => OutputAction::Check,
-        EventAction::Pass   => OutputAction::Pass,
-        EventAction::Drop   => OutputAction::Drop,
+        EventAction::Check => OutputAction::Check,
+        EventAction::Pass => OutputAction::Pass,
+        EventAction::Drop => OutputAction::Drop,
     };
 
-    let decoded = DecodedEvent {
+    // --- Stream framing ---
+    let expected_format = format_from_event(event_format);
+    let frames = {
+        let mut stream_state = STREAM_STATE
+            .get_or_init(|| Mutex::new(StreamState::new()))
+            .lock()
+            .map_err(|_| anyhow::anyhow!("stream state lock poisoned"))?;
+        stream_state.frames_for_event(
+            payload,
+            StreamContext {
+                conn_id: event.conn_id,
+                format: expected_format,
+                source,
+                now_ns,
+            },
+        )?
+    };
+
+    for frame in frames {
+        let decoded = decode_frame(&frame, expected_format, source, output_action, latency_ns);
+
+        match (decoded.status, decoded.action) {
+            (ParseStatus::Ok, OutputAction::Decode) => output::emit(&decoded),
+            (ParseStatus::Ok, OutputAction::Check) => {
+                tracing::debug!("CHECK pass: format={:?}", decoded.format);
+            }
+            _ => tracing::debug!("Decode failed or non-emit action: {:?}", decoded.status),
+        }
+    }
+
+    Ok(())
+}
+
+fn decode_frame(
+    frame: &[u8],
+    expected_format: DetectedFormat,
+    source: PayloadSource,
+    output_action: OutputAction,
+    latency_ns: u64,
+) -> DecodedEvent {
+    let classification = classify(frame, expected_format);
+
+    if classification.verdict == ClassificationVerdict::Mismatch {
+        return DecodedEvent {
+            latency: output::format_latency(latency_ns),
+            format: expected_format,
+            source,
+            status: ParseStatus::ParseError,
+            action: output_action,
+            classification: Some(classification.metadata()),
+            fields: None,
+        };
+    }
+
+    // Route strictly by expected format from kernel metadata, not sniff-first.
+    let result = decode_payload(frame, Some(expected_format));
+
+    DecodedEvent {
         latency: output::format_latency(latency_ns),
         format: result.format,
         source,
         status: result.status,
         action: output_action,
+        classification: Some(classification.metadata()),
         fields: result.fields,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_frame;
+    use crate::output::{
+        ClassificationVerdict, DetectedFormat, EventAction as OutputAction, ParseStatus,
+        PayloadSource,
     };
 
-    match (decoded.status, decoded.action) {
-        (ParseStatus::Ok, OutputAction::Decode) => output::emit(&decoded),
-        (ParseStatus::Ok, OutputAction::Check)  => {
-            tracing::debug!("CHECK pass: format={:?}", decoded.format);
-        }
-        _ => tracing::debug!("Decode failed or non-emit action: {:?}", decoded.status),
-    }
+    #[test]
+    fn classifier_mismatch_blocks_hinted_json_output() {
+        let decoded = decode_frame(
+            b"\x7fELFbad",
+            DetectedFormat::Json,
+            PayloadSource::RingbufInline,
+            OutputAction::Decode,
+            0,
+        );
 
-    Ok(())
+        assert_eq!(decoded.status, ParseStatus::ParseError);
+        assert!(decoded.fields.is_none());
+        assert_eq!(
+            decoded.classification.as_ref().map(|c| c.verdict),
+            Some(ClassificationVerdict::Mismatch)
+        );
+    }
 }

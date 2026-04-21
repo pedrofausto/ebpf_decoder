@@ -5,9 +5,9 @@
 //!   2. Content sniffing (cheap byte-level heuristics)
 //!   3. Fallback → PlainText
 
-use serde_json::Value;
 use crate::output::{DetectedFormat, ParseStatus};
-use crate::parsers::{json, syslog, html, plain};
+use crate::parsers::{html, json, plain, syslog};
+use serde_json::Value;
 
 /// Decoded payload ready for output emission.
 pub struct RouterResult {
@@ -44,7 +44,9 @@ pub fn decode_payload(payload: &[u8], hint: Option<DetectedFormat>) -> RouterRes
 
 fn sniff(data: &[u8]) -> DetectedFormat {
     // Trim leading whitespace
-    let trimmed = data.iter().position(|b| !b.is_ascii_whitespace())
+    let trimmed = data
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
         .map(|i| &data[i..])
         .unwrap_or(data);
 

@@ -9,6 +9,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::content_classifier::classify;
 use crate::format_router::decode_payload;
+use crate::injection;
 use crate::output::{
     self, format_from_event, ClassificationVerdict, DecodedEvent, DetectedFormat,
     EventAction as OutputAction, ParseStatus, PayloadSource,
@@ -125,8 +126,16 @@ pub fn process_sample(data: &[u8]) -> Result<()> {
         )?
     };
 
+    let injection_rule = injection::rule_for(event.dst_port, event.protocol);
     for frame in frames {
-        let decoded = decode_frame(&frame, expected_format, source, output_action, latency_ns);
+        let decoded = decode_frame(
+            &frame,
+            expected_format,
+            source,
+            output_action,
+            latency_ns,
+            injection_rule,
+        );
 
         match (decoded.status, decoded.action) {
             (ParseStatus::Ok, OutputAction::Decode) => output::emit(&decoded),
@@ -146,33 +155,40 @@ fn decode_frame(
     source: PayloadSource,
     output_action: OutputAction,
     latency_ns: u64,
+    injection_rule: Option<&injection::InjectionRule>,
 ) -> DecodedEvent {
     let classification = classify(frame, expected_format);
 
     if classification.verdict == ClassificationVerdict::Mismatch {
-        return DecodedEvent {
+        let mut decoded = DecodedEvent {
             latency: output::format_latency(latency_ns),
             format: expected_format,
             source,
             status: ParseStatus::ParseError,
             action: output_action,
             classification: Some(classification.metadata()),
+            inject: None,
             fields: None,
         };
+        injection::apply(&mut decoded, injection_rule);
+        return decoded;
     }
 
     // Route strictly by expected format from kernel metadata, not sniff-first.
     let result = decode_payload(frame, Some(expected_format));
 
-    DecodedEvent {
+    let mut decoded = DecodedEvent {
         latency: output::format_latency(latency_ns),
         format: result.format,
         source,
         status: result.status,
         action: output_action,
         classification: Some(classification.metadata()),
+        inject: None,
         fields: result.fields,
-    }
+    };
+    injection::apply(&mut decoded, injection_rule);
+    decoded
 }
 
 #[cfg(test)]
@@ -191,6 +207,7 @@ mod tests {
             PayloadSource::RingbufInline,
             OutputAction::Decode,
             0,
+            None,
         );
 
         assert_eq!(decoded.status, ParseStatus::ParseError);

@@ -10,6 +10,8 @@ tokio = { version = "1", features = ["full"] }
 simd-json = "0.13"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+clap = { version = "4.0", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 anyhow = "1.0"

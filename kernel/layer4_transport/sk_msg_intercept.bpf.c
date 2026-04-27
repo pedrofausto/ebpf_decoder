@@ -159,6 +159,8 @@ int sk_msg_interceptor(struct sk_msg_md *msg)
         event->ts_ns        = bpf_ktime_get_ns();
         event->format       = cfg->format;
         event->action       = cfg->action;
+        event->protocol     = 6;
+        event->dst_port     = dst_port;
         event->pad          = 0;
         bpf_ringbuf_submit(event, 0);
     }

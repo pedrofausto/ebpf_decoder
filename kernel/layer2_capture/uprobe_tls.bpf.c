@@ -61,6 +61,14 @@ int BPF_URETPROBE(uprobe_ssl_read_exit, int ret) {
     event->pid = pid;
     event->tid = tid;
     event->ts_ns = ts;
+    event->conn_id = 0;
+    event->is_arena_ptr = 0;
+    event->format = FORMAT_JSON;
+    event->action = ACTION_DECODE;
+    event->protocol = 0;
+    event->dst_port = 0;
+    event->pad = 0;
+    event->arena_offset = 0;
     event->data_len = (__u32)ret > MAX_LOG_CHUNK_SIZE ? MAX_LOG_CHUNK_SIZE : (__u32)ret;
 
     /* Capture decrypted data from userspace buffer */

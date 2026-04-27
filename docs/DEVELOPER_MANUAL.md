@@ -86,12 +86,18 @@ intercept:
     protocol: udp
     format: syslog
     action: check
+  - port: 8080
+    protocol: tcp
+    format: json
+    action: decode
+    inject: "classification:application_log"
 ```
 
 Valid values:
 - `protocol`: `tcp`, `udp`
 - `format`: `json`, `syslog`, `html`, `plain_text`
 - `action`: `decode`, `drop`, `pass`, `check`
+- `inject`: optional string for `decode` entries only
 
 Action behavior:
 - `decode`: kernel validates the configured format, drops mismatches, and emits valid payloads to userspace for decoding.
@@ -99,6 +105,12 @@ Action behavior:
 - `pass`: kernel passes matching packets without capture or decode.
 - `check`: kernel validates the configured format, drops mismatches, and passes valid packets without decode output.
 
+Injection behavior:
+- JSON `decode` entries use `inject: "field:value"` to insert or overwrite a top-level decoded JSON field with a string value.
+- `html`, `syslog`, and `plain_text` `decode` entries emit the configured `inject` string as top-level decoder metadata.
+
 Validation enforced by loader:
 - duplicate `(port, protocol)` entries are rejected
 - missing or invalid `format`/`action` values are rejected
+- `inject` on non-`decode` actions is rejected
+- malformed JSON inject strings without a non-empty field before `:` are rejected

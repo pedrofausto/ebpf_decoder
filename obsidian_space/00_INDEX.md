@@ -35,6 +35,7 @@ Purpose: small, stable notes to reference when indexing code and answering quest
 - Format expansion plan: [[60_FORMAT_EXPANSION_PLAN]]
 - Security fix plan: [[61_SECURITY_FIX_PLAN]]
 - Actions implementation guide: [[62_ACTIONS_IMPLEMENTATION_GUIDE]]
+- Inject implementation session: [[63_SESSION_INJECT_IMPLEMENTATION]]
 - Current packet policy: `drop` always drops; `check`/`decode` drop obvious format mismatches via bounded kernel guards.
 
 ## Phase 1 new files (multi-format decoder)

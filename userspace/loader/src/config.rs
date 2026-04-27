@@ -37,6 +37,9 @@ pub struct InterceptEntry {
     pub format: PayloadFormat,
     /// Required: action for this entry (decode|drop|pass|check).
     pub action: InterceptAction,
+    /// Optional classification injection, valid only for decode entries.
+    #[serde(default)]
+    pub inject: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -79,11 +82,54 @@ impl InterceptAction {
     }
 }
 
+fn validate_inject(entry: &InterceptEntry) -> Result<()> {
+    let Some(inject) = entry.inject.as_ref() else {
+        return Ok(());
+    };
+
+    if entry.action != InterceptAction::Decode {
+        bail!(
+            "inject is only valid with action=decode for port={} protocol={}",
+            entry.port,
+            entry.protocol
+        );
+    }
+
+    if entry.format == PayloadFormat::Json {
+        let Some((field, _value)) = inject.split_once(':') else {
+            bail!(
+                "JSON inject must use field:value for port={} protocol={}",
+                entry.port,
+                entry.protocol
+            );
+        };
+        if field.trim().is_empty() {
+            bail!(
+                "JSON inject field name cannot be empty for port={} protocol={}",
+                entry.port,
+                entry.protocol
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_intercept_config(content: &str) -> Result<InterceptConfig> {
+    let config: InterceptConfig =
+        serde_yaml::from_str(content).context("Failed to parse YAML configuration")?;
+
+    for entry in &config.intercept {
+        validate_inject(entry)?;
+    }
+
+    Ok(config)
+}
+
 pub fn update_port_filter_map(map: &dyn MapCore, config_path: &Path) -> Result<()> {
     let content = fs::read_to_string(config_path)
         .with_context(|| format!("Failed to read config file at {:?}", config_path))?;
-    let config: InterceptConfig =
-        serde_yaml::from_str(&content).context("Failed to parse YAML configuration")?;
+    let config = parse_intercept_config(&content)?;
 
     let mut seen: HashSet<(u16, u8)> = HashSet::new();
     for entry in config.intercept {
@@ -143,4 +189,80 @@ pub fn update_port_filter_map(map: &dyn MapCore, config_path: &Path) -> Result<(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_intercept_config;
+
+    #[test]
+    fn accepts_decode_entry_with_inject() {
+        let config = parse_intercept_config(
+            r#"
+intercept:
+  - port: 8080
+    protocol: tcp
+    format: json
+    action: decode
+    inject: "classification:login"
+"#,
+        )
+        .expect("decode inject should be valid");
+
+        assert_eq!(
+            config.intercept[0].inject.as_deref(),
+            Some("classification:login")
+        );
+    }
+
+    #[test]
+    fn rejects_inject_on_non_decode_action() {
+        let err = parse_intercept_config(
+            r#"
+intercept:
+  - port: 53
+    protocol: udp
+    format: plain_text
+    action: check
+    inject: "classification:dns"
+"#,
+        )
+        .expect_err("inject should be rejected for check action");
+
+        assert!(err.to_string().contains("action=decode"));
+    }
+
+    #[test]
+    fn rejects_malformed_json_inject_without_colon() {
+        let err = parse_intercept_config(
+            r#"
+intercept:
+  - port: 8080
+    protocol: tcp
+    format: json
+    action: decode
+    inject: "classification"
+"#,
+        )
+        .expect_err("JSON inject without colon should be rejected");
+
+        assert!(err.to_string().contains("field:value"));
+    }
+
+    #[test]
+    fn rejects_malformed_json_inject_empty_field() {
+        let err = parse_intercept_config(
+            r#"
+intercept:
+  - port: 8080
+    protocol: tcp
+    format: json
+    action: decode
+    inject: ":login"
+"#,
+        )
+        .expect_err("JSON inject with empty field should be rejected");
+
+        assert!(err.to_string().contains("field name"));
+    }
 }

@@ -26,6 +26,7 @@ intercept:
     protocol: tcp
     format: json
     action: decode
+    inject: "classification:application_log"
   - port: 53
     protocol: udp
     format: plain_text
@@ -34,6 +35,7 @@ intercept:
     protocol: udp
     format: syslog
     action: decode
+    inject: "classification:syslog"
 ```
 
 Supported `protocol` values are `tcp` and `udp`.
@@ -46,6 +48,8 @@ Supported `action` values:
 - `check`: validate the payload against the configured format in kernel, then pass valid packets without decoder output.
 - `drop`: drop matching packets unconditionally.
 - `pass`: pass matching packets without capture or decode.
+
+`decode` entries may include optional `inject` metadata. For JSON payloads, `inject: "field:value"` inserts or overwrites the top-level decoded JSON field with a string value. For syslog, HTML, and plaintext payloads, the configured string is emitted as a top-level `inject` field in the decoder output envelope. `inject` is rejected for `drop`, `pass`, and `check`.
 
 For `check` and `decode`, payload/format mismatch is fail-closed at the kernel guard. For example, an ELF, PE, PDF, ZIP, gzip, PNG, or JPEG payload sent to a JSON port should be dropped or suppressed rather than decoded as plaintext.
 
@@ -90,6 +94,8 @@ Start the decoder in another terminal:
 ```bash
 sudo ./target/release/ebpf-json-decoder
 ```
+
+The decoder reads `config/intercept.yaml` by default to apply optional `inject` metadata. Use `--config <path>` if the loader is using a different config file.
 
 If the pipeline is already loaded and pinned, starting the loader again only reuses `port_proto_filter` and applies/watches the YAML config:
 

@@ -162,6 +162,8 @@ int tc_unified_filter(struct __sk_buff *skb) {
     event->is_arena_ptr = 0;
     event->format       = cfg->format;
     event->action       = cfg->action;
+    event->protocol     = iph->protocol;
+    event->dst_port     = dst_port;
     event->pad          = 0;
     event->arena_offset = 0;
     event->data_len     = safe_len;

@@ -1,6 +1,7 @@
 mod content_classifier;
 mod format_router;
 mod framing;
+mod injection;
 mod json_parser;
 mod output;
 mod parsers;
@@ -9,15 +10,30 @@ mod structs;
 mod text_utils;
 
 use anyhow::{Context, Result};
+use clap::Parser;
 use libbpf_rs::{MapCore, MapHandle, RingBufferBuilder};
 use std::os::fd::{AsFd, AsRawFd};
 use std::path::Path;
 use tracing::info;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(short, long, default_value = "config/intercept.yaml")]
+    config: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
+    let args = Args::parse();
     info!("Starting eBPF Multi-Format Payload Decoder...");
+    info!("Configuration file: {}", args.config);
+
+    let config_path = Path::new(&args.config);
+    let injection_rules = injection::load_rules_from_path(config_path)?;
+    info!("Loaded {} decoder injection rules.", injection_rules.len());
+    injection::set_rules(injection_rules);
 
     /* 1. Identify SIMD backend */
     #[cfg(target_feature = "avx2")]

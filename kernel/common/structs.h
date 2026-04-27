@@ -34,7 +34,9 @@ typedef struct {
     __u8  is_arena_ptr;
     __u8  format;   /* FORMAT_* from port_proto_config */
     __u8  action;   /* ACTION_* from port_proto_config */
-    __u8  pad;
+    __u8  protocol;
+    __u16 dst_port;
+    __u16 pad;
     __u32 arena_offset;
     __u32 data_len;
     __u8  data[MAX_LOG_CHUNK_SIZE];

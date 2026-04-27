@@ -19,6 +19,9 @@ pub struct DecodedEvent {
     /// Userspace content classification result for the emitted frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub classification: Option<ClassificationMetadata>,
+    /// Optional configured classification marker for non-JSON decoded payloads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inject: Option<String>,
     /// Parsed fields or bounded raw text, depending on format.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Value>,

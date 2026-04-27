@@ -60,6 +60,8 @@ Notes:
 | IDX-UDEC-FRAMING | `userspace/decoder/src/framing.rs:1` | `frame()` | Framing strategy selector (Datagram/Newline/OctetCounted/RawBlob) |
 | IDX-UDEC-STREAM | `userspace/decoder/src/stream_state.rs:1` | `StreamState::frames_for_event()` | Bounded TCP stream buffering; drains newline and octet-counted frames |
 | IDX-UDEC-CLASSIFY | `userspace/decoder/src/content_classifier.rs:1` | `classify()` | Userspace signature/text-shape classifier before strict decode |
+| IDX-UDEC-INJECT | `userspace/decoder/src/injection.rs:1` | `apply()` | Optional YAML-driven classification injection into decoded output |
+| IDX-UDEC-INJECT-CONFIG | `userspace/decoder/src/injection.rs:79` | `parse_rules()` | Decoder-side `inject` config lookup by `(dst_port, protocol)` |
 | IDX-UDEC-OUTPUT | `userspace/decoder/src/output.rs:1` | `DecodedEvent` | Normalized output envelope + `emit()` + `format_latency()` |
 | IDX-UDEC-P-JSON | `userspace/decoder/src/parsers/json.rs:1` | `parse()` | JSON parser (AVX2 simd-json + serde fallback) extracted from json_parser.rs |
 | IDX-UDEC-P-PLAIN | `userspace/decoder/src/parsers/plain.rs:1` | `parse()` | Plaintext fallback (lossy UTF-8, bounded 4 KB display) |
@@ -84,5 +86,6 @@ Notes:
 | IDX-LOAD-MAPVAL | `userspace/loader/src/config.rs:113` | `PortProtoConfig { format, action }` | Map value written to port_proto_filter |
 | IDX-UDEC-STRUCTS | `userspace/decoder/src/structs.rs:1` | `EventFormat / EventAction` | Userspace mirrors of kernel format/action enums |
 | IDX-UDEC-ACTION-GATE | `userspace/decoder/src/json_parser.rs:47` | `match event_action` | Action gate: skips drop/pass, gates emit on decode vs check |
+| IDX-UDEC-INJECT-APPLY | `userspace/decoder/src/json_parser.rs:128` | `injection::apply` | Applies configured injection after successful decode |
 | IDX-K-XDP-ACTION | `kernel/layer1_xdp/xdp_edge.bpf.c:87` | `cfg->action == ACTION_DROP/PASS` | XDP enforces drop/pass before rate-limiter |
 | IDX-K-TC-ACTION | `kernel/layer1_tc/tc_stateful.bpf.c:69` | `cfg->action == ACTION_DROP/PASS` | TC enforces drop/pass; propagates format+action in event |

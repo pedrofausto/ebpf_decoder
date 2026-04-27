@@ -63,7 +63,9 @@ pub struct log_event_t {
     pub is_arena_ptr: u8,
     pub format: u8, // FORMAT_* from port_proto_config
     pub action: u8, // ACTION_* from port_proto_config
-    pub pad: u8,
+    pub protocol: u8,
+    pub dst_port: u16,
+    pub pad: u16,
     pub arena_offset: u32,
     pub data_len: u32,
     pub data: [u8; 1024],

@@ -24,6 +24,12 @@ static ARENA_SIZE: OnceLock<usize> = OnceLock::new();
 static STREAM_STATE: OnceLock<Mutex<StreamState>> = OnceLock::new();
 
 pub fn set_arena_layout(ptr: usize, size: usize) {
+    if size > isize::MAX as usize {
+        panic!("Arena size exceeds isize::MAX, which is required for safe slice construction.");
+    }
+    if ptr.checked_add(size).is_none() {
+        panic!("Arena ptr + size overflows usize.");
+    }
     let _ = ARENA_BASE.set(ptr);
     let _ = ARENA_SIZE.set(size);
 }
@@ -72,15 +78,14 @@ pub fn process_sample(data: &[u8]) -> Result<()> {
             .checked_add(data_len)
             .context("Arena offset + len overflow")?;
 
-        if end > arena_size {
-            bail!(
-                "Arena access out of bounds: end={} > size={}",
-                end,
-                arena_size
-            );
-        }
-        let ptr = (base_ptr + offset) as *const u8;
-        let slice = unsafe { std::slice::from_raw_parts(ptr, data_len) };
+        // Safe slice construction: arena layout was validated in set_arena_layout
+        let arena_slice = unsafe { std::slice::from_raw_parts(base_ptr as *const u8, arena_size) };
+
+        let slice = arena_slice.get(offset..end).context(format!(
+            "Arena access out of bounds: end={} > size={}",
+            end, arena_size
+        ))?;
+
         (slice, PayloadSource::Arena)
     } else {
         if data_len > event.data.len() {

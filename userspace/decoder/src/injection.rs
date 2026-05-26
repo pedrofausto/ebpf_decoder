@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::sync::OnceLock;
 
 use crate::output::{DecodedEvent, DetectedFormat, EventAction, ParseStatus};
@@ -69,6 +69,12 @@ impl ConfigFormat {
 }
 
 pub fn load_rules_from_path(path: &Path) -> Result<HashMap<InjectionKey, InjectionRule>> {
+    for component in path.components() {
+        if matches!(component, Component::ParentDir) {
+            bail!("Path traversal detected in config path: {:?}", path);
+        }
+    }
+
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read decoder config file at {:?}", path))?;
     parse_rules(&content)
@@ -134,7 +140,8 @@ fn parse_rules(content: &str) -> Result<HashMap<InjectionKey, InjectionRule>> {
             validate_json_inject(&inject, entry.port, &entry.protocol)?;
         }
 
-        let protocol = protocol_number(&entry.protocol)?;
+        let protocol = ebpf_common::parse_protocol(&entry.protocol)
+            .with_context(|| format!("Unsupported protocol: {}", entry.protocol))?;
         rules.insert(
             InjectionKey {
                 port: entry.port,
@@ -187,14 +194,6 @@ fn validate_json_inject(inject: &str, port: u16, protocol: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn protocol_number(protocol: &str) -> Result<u8> {
-    match protocol.to_lowercase().as_str() {
-        "tcp" => Ok(6),
-        "udp" => Ok(17),
-        _ => bail!("Unsupported protocol: {}", protocol),
-    }
 }
 
 #[cfg(test)]
@@ -281,6 +280,18 @@ mod tests {
 
         assert_eq!(decoded.fields, Some(json!({"event":"login"})));
         assert!(decoded.inject.is_none());
+    }
+
+    #[test]
+    fn test_load_rules_path_traversal_denied() {
+        use std::path::Path;
+        let malformed_path = Path::new("config/../../etc/passwd");
+        let result = super::load_rules_from_path(malformed_path);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Path traversal detected"));
     }
 
     #[test]

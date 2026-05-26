@@ -3,6 +3,7 @@ members = [
     "userspace/loader",
     "userspace/decoder",
     "userspace/config_injector",
+    "userspace/common",
 ]
 resolver = "2"
 

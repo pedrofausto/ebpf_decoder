@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
     }
     info!("Arena pages ready.");
     let (base, size) = (arena_ptr as usize, arena_size);
-    json_parser::set_arena_layout(base, size);
+    json_parser::set_arena_layout(base, size).context("Failed to set arena layout")?;
 
     /* 3. Attach to the pinned RingBuffer map */
     let rb_pin_path = "/sys/fs/bpf/ebpf-json-pipeline/log_ringbuf";

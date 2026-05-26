@@ -18,7 +18,7 @@ pub fn parse(data: &[u8]) -> Result<HtmlResult> {
     // --- Title ---
     let title =
         extract_between_ascii_case_insensitive(text, "<title>", "</title>").unwrap_or_default();
-    let title = crate::text_utils::safe_truncate(&title, MAX_TITLE_BYTES).to_string();
+    let title = crate::text_utils::safe_truncate(title, MAX_TITLE_BYTES);
 
     // --- Body excerpt: strip tags, take first N bytes of text ---
     let excerpt = strip_tags(text, MAX_EXCERPT_BYTES);
@@ -35,11 +35,11 @@ pub fn parse(data: &[u8]) -> Result<HtmlResult> {
     })
 }
 
-fn extract_between_ascii_case_insensitive(
-    original: &str,
+fn extract_between_ascii_case_insensitive<'a>(
+    original: &'a str,
     open: &str,
     close: &str,
-) -> Option<String> {
+) -> Option<&'a str> {
     let bytes = original.as_bytes();
     let open_bytes = open.as_bytes();
     let close_bytes = close.as_bytes();
@@ -49,7 +49,7 @@ fn extract_between_ascii_case_insensitive(
     let end_rel = find_ascii_case_insensitive(&bytes[content_start..], close_bytes)?;
     let content_end = content_start + end_rel;
 
-    Some(original[content_start..content_end].trim().to_string())
+    Some(original[content_start..content_end].trim())
 }
 
 fn find_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> {

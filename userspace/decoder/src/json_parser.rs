@@ -23,15 +23,20 @@ static ARENA_BASE: OnceLock<usize> = OnceLock::new();
 static ARENA_SIZE: OnceLock<usize> = OnceLock::new();
 static STREAM_STATE: OnceLock<Mutex<StreamState>> = OnceLock::new();
 
-pub fn set_arena_layout(ptr: usize, size: usize) {
+pub fn set_arena_layout(ptr: usize, size: usize) -> Result<()> {
+    ptr.checked_add(size)
+        .context("Arena layout overflows address space")?;
     if size > isize::MAX as usize {
-        panic!("Arena size exceeds isize::MAX, which is required for safe slice construction.");
+        bail!("Arena size too large for slice indexing");
     }
-    if ptr.checked_add(size).is_none() {
-        panic!("Arena ptr + size overflows usize.");
-    }
-    let _ = ARENA_BASE.set(ptr);
-    let _ = ARENA_SIZE.set(size);
+
+    ARENA_BASE
+        .set(ptr)
+        .map_err(|_| anyhow::anyhow!("ARENA_BASE already set"))?;
+    ARENA_SIZE
+        .set(size)
+        .map_err(|_| anyhow::anyhow!("ARENA_SIZE already set"))?;
+    Ok(())
 }
 
 /// Called for every ringbuf event. Validates struct, extracts payload, routes to decoder.
@@ -78,13 +83,12 @@ pub fn process_sample(data: &[u8]) -> Result<()> {
             .checked_add(data_len)
             .context("Arena offset + len overflow")?;
 
-        // Safe slice construction: arena layout was validated in set_arena_layout
+        // Create a slice of the entire arena and use safe indexing.
+        // The layout is validated in set_arena_layout.
         let arena_slice = unsafe { std::slice::from_raw_parts(base_ptr as *const u8, arena_size) };
-
-        let slice = arena_slice.get(offset..end).context(format!(
-            "Arena access out of bounds: end={} > size={}",
-            end, arena_size
-        ))?;
+        let slice = arena_slice
+            .get(offset..end)
+            .context("Arena access out of bounds")?;
 
         (slice, PayloadSource::Arena)
     } else {

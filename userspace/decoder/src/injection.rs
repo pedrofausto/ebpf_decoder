@@ -134,7 +134,8 @@ fn parse_rules(content: &str) -> Result<HashMap<InjectionKey, InjectionRule>> {
             validate_json_inject(&inject, entry.port, &entry.protocol)?;
         }
 
-        let protocol = protocol_number(&entry.protocol)?;
+        let protocol = ebpf_common::parse_protocol(&entry.protocol)
+            .with_context(|| format!("Unsupported protocol: {}", entry.protocol))?;
         rules.insert(
             InjectionKey {
                 port: entry.port,
@@ -187,14 +188,6 @@ fn validate_json_inject(inject: &str, port: u16, protocol: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn protocol_number(protocol: &str) -> Result<u8> {
-    match protocol.to_lowercase().as_str() {
-        "tcp" => Ok(6),
-        "udp" => Ok(17),
-        _ => bail!("Unsupported protocol: {}", protocol),
-    }
 }
 
 #[cfg(test)]

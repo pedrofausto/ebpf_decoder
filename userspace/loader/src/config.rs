@@ -133,13 +133,9 @@ pub fn update_port_filter_map(map: &dyn MapCore, config_path: &Path) -> Result<(
 
     let mut seen: HashSet<(u16, u8)> = HashSet::new();
     for entry in config.intercept {
-        let proto = match entry.protocol.to_lowercase().as_str() {
-            "tcp" => 6u8,
-            "udp" => 17u8,
-            _ => {
-                eprintln!("Unsupported protocol: {}", entry.protocol);
-                continue;
-            }
+        let Some(proto) = ebpf_common::parse_protocol(&entry.protocol) else {
+            eprintln!("Unsupported protocol: {}", entry.protocol);
+            continue;
         };
 
         let key_tuple = (entry.port, proto);

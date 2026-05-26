@@ -48,11 +48,23 @@ impl StreamState {
 
         self.evict_idle(ctx.now_ns);
 
-        let strategy = strategy_for(ctx);
-        if matches!(strategy, FrameStrategy::Datagram | FrameStrategy::RawBlob) {
-            return Ok(vec![payload.to_vec()]);
+        match strategy_for(ctx) {
+            FrameStrategy::Datagram | FrameStrategy::RawBlob => Ok(vec![payload.to_vec()]),
+            FrameStrategy::NewlineDelimited => {
+                self.process_stream(payload, ctx, drain_newline_frames)
+            }
+            FrameStrategy::OctetCounted => {
+                self.process_stream(payload, ctx, drain_syslog_frames)
+            }
         }
+    }
 
+    fn process_stream(
+        &mut self,
+        payload: &[u8],
+        ctx: StreamContext,
+        drain_fn: fn(&mut Vec<u8>, &mut Vec<Vec<u8>>),
+    ) -> Result<Vec<Vec<u8>>> {
         let key = StreamKey::from_context(ctx);
         let stream = self.streams.entry(key).or_insert_with(|| StreamBuffer {
             bytes: Vec::new(),
@@ -73,12 +85,7 @@ impl StreamState {
         stream.last_seen_ns = ctx.now_ns;
 
         let mut frames = Vec::new();
-        match strategy {
-            FrameStrategy::NewlineDelimited => drain_newline_frames(&mut stream.bytes, &mut frames),
-            FrameStrategy::OctetCounted => drain_syslog_frames(&mut stream.bytes, &mut frames),
-            FrameStrategy::Datagram | FrameStrategy::RawBlob => unreachable!(),
-        }
-
+        drain_fn(&mut stream.bytes, &mut frames);
         Ok(frames)
     }
 

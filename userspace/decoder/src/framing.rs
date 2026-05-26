@@ -13,7 +13,7 @@ pub enum FrameResult<'a> {
 }
 
 /// Strategy used to delimit payload frames.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameStrategy {
     /// Each kernel event is a self-contained datagram.
     Datagram,

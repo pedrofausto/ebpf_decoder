@@ -226,4 +226,11 @@ mod tests {
             Some(ClassificationVerdict::Mismatch)
         );
     }
+
+    #[test]
+    fn set_arena_layout_overflow_fails() {
+        let result = super::set_arena_layout(usize::MAX, 1);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Arena layout overflows address space");
+    }
 }

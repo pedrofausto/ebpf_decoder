@@ -46,7 +46,8 @@ pub fn process_sample(data: &[u8]) -> Result<()> {
         bail!("Sample too small to contain log_event_t");
     }
 
-    let event: &log_event_t = unsafe { &*(data.as_ptr() as *const log_event_t) };
+    let event: log_event_t =
+        unsafe { std::ptr::read_unaligned(data.as_ptr() as *const log_event_t) };
     let data_len = event.data_len as usize;
 
     if data_len == 0 {

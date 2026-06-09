@@ -112,9 +112,16 @@ impl BpfPipeline {
                 "SAFETY: Safety timer expired! Detaching XDP from {}...",
                 interface
             );
-            let _ = std::process::Command::new("ip")
-                .args(["link", "set", "dev", &interface, "xdp", "off"])
-                .status();
+            if !interface.starts_with('-') {
+                let _ = std::process::Command::new("ip")
+                    .args(["link", "set", "dev", &interface, "xdp", "off"])
+                    .status();
+            } else {
+                warn!(
+                    "SAFETY: Invalid interface name '{}', skipping XDP detach command.",
+                    interface
+                );
+            }
 
             warn!("SAFETY: XDP detached to prevent operator lockout. Exiting.");
             std::process::exit(1);
@@ -122,6 +129,12 @@ impl BpfPipeline {
     }
 
     pub fn load_and_attach(interface: &str) -> Result<Self> {
+        if interface.starts_with('-') {
+            return Err(anyhow::anyhow!(
+                "Invalid interface name: cannot start with a hyphen"
+            ));
+        }
+
         let mut links = Vec::new();
         let pin_dir = "/sys/fs/bpf/ebpf-json-pipeline";
 

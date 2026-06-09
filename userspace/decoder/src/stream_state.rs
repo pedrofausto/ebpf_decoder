@@ -53,9 +53,7 @@ impl StreamState {
             FrameStrategy::NewlineDelimited => {
                 self.process_stream(payload, ctx, drain_newline_frames)
             }
-            FrameStrategy::OctetCounted => {
-                self.process_stream(payload, ctx, drain_syslog_frames)
-            }
+            FrameStrategy::OctetCounted => self.process_stream(payload, ctx, drain_syslog_frames),
         }
     }
 
